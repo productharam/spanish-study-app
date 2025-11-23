@@ -29,7 +29,7 @@ JSON 밖의 다른 설명, 문장, 주석은 절대 출력하지 마세요.
 `;
 
   const response = await client.chat.completions.create({
-    model: "gpt-5-nano",
+    model: "gpt-5.1",
     messages: [{ role: "user", content: prompt }],
     response_format: { type: "json_object" },
   });

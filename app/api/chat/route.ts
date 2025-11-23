@@ -62,7 +62,7 @@ PRIMER MENSAJE
 
     // 3) GPT 호출
     const completion = await client.chat.completions.create({
-      model: "gpt-5-nano",
+      model: "gpt-5.1",
       messages: finalMessages,
     });
 
