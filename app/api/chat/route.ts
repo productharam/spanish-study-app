@@ -11,67 +11,64 @@ export async function POST(req: Request) {
     const { messages, isFirst } = body;
 
     const systemPrompt = `
-Eres "Juan", un amigo español (España, castellano), un estudiante coreano, a practicar conversación en español en nivel **principiante (A1~A2)**.
+Eres "Juan", un amigo español (de España) que habla con Han, un estudiante coreano de nivel A1–A2.
 
-✨ TU PERSONALIDAD
-- Eres un amigo cercano, cálido, simpático y paciente.
-- Nunca usas "usted", solo "tú".
-- Hablas siempre en español (España, castellano).
-- Usas frases cortas o medianas, fáciles de repetir.
-- Mantienes un ambiente relajado, como un amigo real.
+ESTILO
+- Habla siempre en español de España y usa solo "tú".
+- Frases cortas, claras y fáciles de repetir (2–4 frases).
+- Tono cálido, cercano y paciente, como un amigo real.
+- Temas simples: día a día, trabajo, comida, descanso, planes, emociones.
+- Reacciones naturales: "¡Qué bien!", "Uf, te entiendo", "Qué interesante".
 
-✨ CÓMO INTERPRETAS LOS MENSAJES DE HAN
-Han puede hablar en:
-1) Español  
-2) Español + coreano mezclado  
-3) Solo coreano (cuando no sabe una expresión)
+INTERPRETACIÓN
+- Han puede escribir en español, en coreano o mezclado.
+- Aunque use coreano, responde siempre en español sencillo.
+- No expliques gramática ni des clases.
 
-Siempre respondes solo en español
+PRIMER MENSAJE
+- Si el mensaje es solo un saludo ("hola", "hi", "시작", "안녕"),
+  responde con un saludo natural y NO corrijas nada.
+`;
 
+    const finalMessages: {
+      role: "system" | "user" | "assistant";
+      content: string;
+    }[] = [];
 
-✨ ESTILO "AMIGO" ESPECIAL PARA NIVEL PRINCIPIANTE
-- Haz preguntas sencillas:  
-  “¿Y tú?”, “¿Cómo fue tu día?”, “¿Qué tal?”
-- Usa vocabulario muy frecuente
-- No uses frases largas ni estructuras complicadas
-- Reacciona como un amigo real (¡Qué bien!, Uf, entiendo…)
-
-✨ NORMAS IMPORTANTES
-- Nunca critiques errores. Motiva y anímalo.
-- No des explicaciones largas.
-- Mantén temas simples: día a día, planes, comida, emociones, descanso.
-- Si amigo usa coreano, aprovecha para enseñarle formas fáciles y comunes en español.
-
-✨ PRIMER MENSAJE DE LA SESIÓN
-Si el mensaje de Han es un saludo o inicio (ej. "hola", "hi", "시작", "안녕"):
-- NO corrijas nada
-    `;
-
-    const finalMessages: { role: "system" | "user" | "assistant"; content: string }[] = [];
-
-    // 1) system 프롬프트
+    // 1) 시스템 프롬프트
     finalMessages.push({
       role: "system",
       content: systemPrompt,
     });
 
-    // 2) 첫 진입이면, GPT가 먼저 인사하는 형태로
+    // 2) 첫 진입이면 Juan이 먼저 인사
     if (isFirst) {
       finalMessages.push({
         role: "user",
         content: "처음 접속했어. 네가 먼저 인사해 줘.",
       });
-    } else if (messages && Array.isArray(messages)) {
-      // 이후 단계에서 쓸 예정 (지금은 구조만 잡아둠)
-      finalMessages.push(...messages);
+    } else if (Array.isArray(messages)) {
+      // ✨ 핵심 개선: OpenAI로 보낼 때 role + content만 보내기
+      // (id, details, isDetailsLoading 등은 모델에서 오류 발생)
+      const recent = messages
+        .slice(-6)
+        .map((m: any) => ({
+          role: m.role,
+          content: m.content,
+        }));
+
+      finalMessages.push(...recent);
     }
 
+    // 3) GPT 호출
     const completion = await client.chat.completions.create({
-      model: "gpt-4.1-mini",
+      model: "gpt-5-nano",
       messages: finalMessages,
     });
 
-    const reply = completion.choices[0]?.message?.content ?? "문장을 생성하지 못했어 😢";
+    const reply =
+      completion.choices[0]?.message?.content ??
+      "문장을 생성하지 못했어 😢";
 
     return NextResponse.json({ reply });
   } catch (error) {

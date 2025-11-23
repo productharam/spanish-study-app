@@ -36,12 +36,13 @@ export async function POST(req: NextRequest) {
         body: JSON.stringify({
           text,
           // 스페인어 포함 다국어용 모델 (퀄리티 좋음)
-          model_id: "eleven_multilingual_v2",
+          model_id: "eleven_turbo_v2_5",
           voice_settings: {
-            stability: 0.5,
-            similarity_boost: 0.75,
+            stability: 0.4,
+            similarity_boost: 0.5,
             style: 0.3,
             use_speaker_boost: true,
+            output_format: "mp3_16000",
           },
         }),
       }
