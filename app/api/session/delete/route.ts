@@ -37,7 +37,29 @@ export async function POST(req: Request) {
       );
     }
 
-    // 2️⃣ 세션 삭제 (FK on delete cascade 덕분에 메시지도 같이 삭제)
+    // 2️⃣ Storage에서 이 세션의 TTS 파일들 먼저 삭제
+    try {
+      const bucket = supabaseServer.storage.from("tts-audio");
+
+      // sessionId 폴더 안의 파일 목록 조회
+      const { data: files, error: listError } = await bucket.list(sessionId);
+
+      if (listError) {
+        console.error("Storage list error for session:", sessionId, listError);
+      } else if (files && files.length > 0) {
+        const paths = files.map((f) => `${sessionId}/${f.name}`);
+        const { error: removeError } = await bucket.remove(paths);
+
+        if (removeError) {
+          console.error("Storage remove error:", removeError);
+        }
+      }
+    } catch (storageErr) {
+      console.error("Storage cleanup error:", storageErr);
+      // mp3 삭제 실패했다고 해서 DB 삭제까지 막을 필요는 없으니 계속 진행
+    }
+
+    // 3️⃣ 세션 삭제 (FK ON DELETE CASCADE 덕분에 메시지도 같이 삭제)
     const { error: deleteError } = await supabaseServer
       .from("chat_sessions")
       .delete()

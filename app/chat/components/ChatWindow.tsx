@@ -297,8 +297,9 @@ export default function ChatWindow() {
   };
 
   // 🔊 TTS: 메시지 1개에 대해 한 번만 API 호출, 이후 재사용
-  const handlePlayTTS = async (message: ChatMessage) => {
+     const handlePlayTTS = async (message: ChatMessage) => {
     try {
+      // 1️⃣ 이미 프론트 캐시에 URL이 있으면 그대로 재생
       if (audioCacheRef.current.has(message.id)) {
         const existingUrl = audioCacheRef.current.get(message.id)!;
         const audio = new Audio(existingUrl);
@@ -309,19 +310,37 @@ export default function ChatWindow() {
         return;
       }
 
+      if (!sessionId) {
+        alert("세션 정보가 없어서 음성을 재생할 수 없어요 🥲");
+        return;
+      }
+
       setPlayingMessageId(message.id);
 
+      // 2️⃣ 서버에 TTS URL 요청 (세션 ID도 함께 전송)
       const res = await fetch("/api/tts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: message.content }),
+        body: JSON.stringify({
+          text: message.content,
+          sessionId, // ✅ 어떤 세션/메시지인지 서버가 알 수 있게
+        }),
       });
 
-      if (!res.ok) throw new Error("TTS 요청 실패");
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        console.error("TTS 요청 실패:", data);
+        throw new Error("TTS 요청 실패");
+      }
 
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
+      const data = await res.json();
+      const url = data.url as string | undefined;
 
+      if (!url) {
+        throw new Error("TTS URL이 응답에 없어요");
+      }
+
+      // 3️⃣ 프론트 캐시에 URL 저장 (Supabase public URL)
       audioCacheRef.current.set(message.id, url);
 
       const audio = new Audio(url);
@@ -334,6 +353,8 @@ export default function ChatWindow() {
       setPlayingMessageId(null);
     }
   };
+
+
 
   // 타자 효과로 assistant 메시지 출력
   const startTypewriter = (fullText: string) => {
