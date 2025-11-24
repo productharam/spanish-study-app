@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import OpenAI from "openai";
+import { supabaseServer } from "@/lib/supabaseServerClient"; // ✅ 추가
 
 const client = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY!,
@@ -66,7 +67,7 @@ JSON 밖의 다른 설명, 문장, 주석은 절대 출력하지 마세요.
 
 export async function POST(req: Request) {
   try {
-    const { text } = await req.json();
+    const { text, sessionId } = await req.json(); // ✅ sessionId도 받기
 
     if (!text || typeof text !== "string") {
       return NextResponse.json(
@@ -94,6 +95,40 @@ export async function POST(req: Request) {
 
     if (!result) {
       throw lastError ?? new Error("Failed to generate details");
+    }
+
+    // ✅ 여기서 Supabase에 details 저장
+    if (sessionId) {
+      try {
+        // 1) 이 세션에서, assistant + 해당 content 텍스트인 메시지 중 가장 최근 것 찾기
+        const { data: targetMessages, error: selectError } = await supabaseServer
+          .from("chat_messages")
+          .select("id")
+          .eq("session_id", sessionId)
+          .eq("role", "assistant")
+          .eq("content", cleaned)
+          .order("created_at", { ascending: false })
+          .limit(1);
+
+        if (selectError) {
+          console.error("select message for details error:", selectError);
+        } else if (targetMessages && targetMessages.length > 0) {
+          const targetId = targetMessages[0].id;
+
+          const { error: updateError } = await supabaseServer
+            .from("chat_messages")
+            .update({ details: result })
+            .eq("id", targetId);
+
+          if (updateError) {
+            console.error("update details error:", updateError);
+          }
+        } else {
+          console.warn("No matching assistant message found to update details.");
+        }
+      } catch (dbErr) {
+        console.error("DB update (details) error:", dbErr);
+      }
     }
 
     return NextResponse.json(result);

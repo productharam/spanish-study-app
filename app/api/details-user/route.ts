@@ -1,6 +1,7 @@
 // app/api/details-user/route.ts
 import { NextResponse } from "next/server";
 import OpenAI from "openai";
+import { supabaseServer } from "@/lib/supabaseServerClient"; // ✅ 추가
 
 const client = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY!,
@@ -72,7 +73,7 @@ JSON 밖의 다른 설명, 문장, 주석은 절대 출력하지 마세요.
 
 export async function POST(req: Request) {
   try {
-    const { text } = await req.json();
+    const { text, sessionId } = await req.json(); // ✅ sessionId 추가
 
     if (!text || typeof text !== "string") {
       return NextResponse.json(
@@ -81,7 +82,6 @@ export async function POST(req: Request) {
       );
     }
 
-    // 너무 길면 앞부분만 보내서 토큰/속도 최적화
     const cleaned = text.slice(0, 400).trim();
 
     let result:
@@ -102,6 +102,39 @@ export async function POST(req: Request) {
 
     if (!result) {
       throw lastError ?? new Error("Failed to generate user details");
+    }
+
+    // ✅ Supabase에 details 저장
+    if (sessionId) {
+      try {
+        const { data: targetMessages, error: selectError } = await supabaseServer
+          .from("chat_messages")
+          .select("id")
+          .eq("session_id", sessionId)
+          .eq("role", "user")
+          .eq("content", cleaned)
+          .order("created_at", { ascending: false })
+          .limit(1);
+
+        if (selectError) {
+          console.error("select message for user details error:", selectError);
+        } else if (targetMessages && targetMessages.length > 0) {
+          const targetId = targetMessages[0].id;
+
+          const { error: updateError } = await supabaseServer
+            .from("chat_messages")
+            .update({ details: result })
+            .eq("id", targetId);
+
+          if (updateError) {
+            console.error("update user details error:", updateError);
+          }
+        } else {
+          console.warn("No matching user message found to update details.");
+        }
+      } catch (dbErr) {
+        console.error("DB update (user details) error:", dbErr);
+      }
     }
 
     return NextResponse.json(result);
