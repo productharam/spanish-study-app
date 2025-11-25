@@ -9,12 +9,37 @@ export async function POST(req: Request) {
 
     if (!sessionId || !role || !content) {
       return NextResponse.json(
-        { error: "sessionId, role, content are required" },
+        { ok: false, error: "sessionId, role, content are required" },
         { status: 400 }
       );
     }
 
-    const userId = process.env.DEV_USER_ID!;
+    // 🔐 Authorization 헤더에서 access token 꺼내기
+    const authHeader = req.headers.get("Authorization");
+    const token = authHeader?.startsWith("Bearer ")
+      ? authHeader.slice(7)
+      : undefined;
+
+    if (!token) {
+      return NextResponse.json(
+        { ok: false, error: "Missing access token" },
+        { status: 401 }
+      );
+    }
+
+    const {
+      data: { user },
+      error: authError,
+    } = await supabaseServer.auth.getUser(token);
+
+    if (authError || !user) {
+      return NextResponse.json(
+        { ok: false, error: "Unauthorized" },
+        { status: 401 }
+      );
+    }
+
+    const userId = user.id;
 
     const { data, error } = await supabaseServer
       .from("chat_messages")
@@ -30,7 +55,7 @@ export async function POST(req: Request) {
 
     if (error) {
       return NextResponse.json(
-        { error: error.message },
+        { ok: false, error: error.message },
         { status: 500 }
       );
     }

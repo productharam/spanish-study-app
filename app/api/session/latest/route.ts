@@ -2,9 +2,34 @@
 import { NextResponse } from "next/server";
 import { supabaseServer } from "@/lib/supabaseServerClient";
 
-export async function GET() {
+export async function GET(req: Request) {
   try {
-    const userId = process.env.DEV_USER_ID!;
+    const authHeader = req.headers.get("Authorization");
+    const token = authHeader?.startsWith("Bearer ")
+      ? authHeader.slice(7)
+      : undefined;
+
+    if (!token) {
+      return NextResponse.json(
+        { ok: false, error: "Missing access token" },
+        { status: 401 }
+      );
+    }
+
+    const {
+      data: { user },
+      error: authError,
+    } = await supabaseServer.auth.getUser(token);
+
+    if (authError || !user) {
+      return NextResponse.json(
+        { ok: false, error: "Unauthorized" },
+        { status: 401 }
+      );
+    }
+
+    const userId = user.id;
+
 
     // 1️⃣ 가장 최근 세션 하나 가져오기
     const { data: session, error: sessionError } = await supabaseServer

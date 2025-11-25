@@ -13,13 +13,35 @@ export async function POST(req: Request) {
       );
     }
 
-    // dev user_id (로그인 기능 붙이기 전 임시 사용자)
-    const userId = process.env.DEV_USER_ID!;
+    // 🔐 Authorization 헤더에서 access token 꺼내기
+    const authHeader = req.headers.get("Authorization");
+    const token = authHeader?.startsWith("Bearer ")
+      ? authHeader.slice(7)
+      : undefined;
 
-    // title = 첫 메시지 앞 20자
+    if (!token) {
+      return NextResponse.json(
+        { error: "Missing access token" },
+        { status: 401 }
+      );
+    }
+
+    const {
+      data: { user },
+      error: authError,
+    } = await supabaseServer.auth.getUser(token);
+
+    if (authError || !user) {
+      return NextResponse.json(
+        { error: "Unauthorized" },
+        { status: 401 }
+      );
+    }
+
+    const userId = user.id;
+
     const title = firstMessage.substring(0, 20) + "...";
 
-    // 1️⃣ 세션 생성
     const { data: sessionData, error: sessionError } = await supabaseServer
       .from("chat_sessions")
       .insert({
@@ -36,7 +58,6 @@ export async function POST(req: Request) {
       );
     }
 
-    // 2️⃣ 첫 메시지 저장
     const { error: msgError } = await supabaseServer
       .from("chat_messages")
       .insert({
@@ -47,10 +68,7 @@ export async function POST(req: Request) {
       });
 
     if (msgError) {
-      return NextResponse.json(
-        { error: msgError.message },
-        { status: 500 }
-      );
+      return NextResponse.json({ error: msgError.message }, { status: 500 });
     }
 
     return NextResponse.json({

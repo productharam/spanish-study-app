@@ -1,4 +1,3 @@
-// app/api/session/delete/route.ts
 import { NextResponse } from "next/server";
 import { supabaseServer } from "@/lib/supabaseServerClient";
 
@@ -14,7 +13,32 @@ export async function POST(req: Request) {
       );
     }
 
-    const userId = process.env.DEV_USER_ID!;
+    const authHeader = req.headers.get("Authorization");
+    const token = authHeader?.startsWith("Bearer ")
+      ? authHeader.slice(7)
+      : undefined;
+
+    if (!token) {
+      return NextResponse.json(
+        { error: "Missing access token" },
+        { status: 401 }
+      );
+    }
+
+    const {
+      data: { user },
+      error: authError,
+    } = await supabaseServer.auth.getUser(token);
+
+    if (authError || !user) {
+      return NextResponse.json(
+        { error: "Unauthorized" },
+        { status: 401 }
+      );
+    }
+
+    const userId = user.id;
+
     
     // 1️⃣ 이 세션이 진짜 이 유저의 것인지 확인
     const { data: session, error: sessionError } = await supabaseServer

@@ -13,10 +13,33 @@ export async function POST(req: Request) {
       );
     }
 
-    const userId = process.env.DEV_USER_ID!;
+    const authHeader = req.headers.get("Authorization");
+    const token = authHeader?.startsWith("Bearer ")
+      ? authHeader.slice(7)
+      : undefined;
+
+    if (!token) {
+      return NextResponse.json(
+        { error: "Missing access token" },
+        { status: 401 }
+      );
+    }
+
+    const {
+      data: { user },
+      error: authError,
+    } = await supabaseServer.auth.getUser(token);
+
+    if (authError || !user) {
+      return NextResponse.json(
+        { error: "Unauthorized" },
+        { status: 401 }
+      );
+    }
+
+    const userId = user.id;
     const title = greeting.substring(0, 20) + "...";
 
-    // 1️⃣ 세션 생성
     const { data: sessionData, error: sessionError } = await supabaseServer
       .from("chat_sessions")
       .insert({
@@ -33,7 +56,6 @@ export async function POST(req: Request) {
       );
     }
 
-    // 2️⃣ 첫 assistant 메시지(인사) 저장
     const { error: msgError } = await supabaseServer
       .from("chat_messages")
       .insert({
@@ -44,10 +66,7 @@ export async function POST(req: Request) {
       });
 
     if (msgError) {
-      return NextResponse.json(
-        { error: msgError.message },
-        { status: 500 }
-      );
+      return NextResponse.json({ error: msgError.message }, { status: 500 });
     }
 
     return NextResponse.json({
