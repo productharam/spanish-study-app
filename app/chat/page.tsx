@@ -1,4 +1,8 @@
+// app/chat/page.tsx
+import { Suspense } from "react";
 import ChatWindow from "./components/ChatWindow";
+
+export const dynamic = "force-dynamic"; // (선택) /chat을 CSR로 강제
 
 export default function ChatPage() {
   return (
@@ -11,7 +15,9 @@ export default function ChatPage() {
         padding: "20px",
       }}
     >
-      <ChatWindow />
+      <Suspense fallback={<div>채팅 화면을 불러오는 중입니다...</div>}>
+        <ChatWindow />
+      </Suspense>
     </div>
   );
 }
