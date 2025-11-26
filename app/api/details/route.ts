@@ -10,6 +10,7 @@ const client = new OpenAI({
 async function generateDetails(text: string) {
   const prompt = `
 다음 스페인어 문장을 분석해서 아래 JSON 형식으로만 출력하세요.
+말투는 20세 스페인인 교환학생 친구가 나에게 스페인어 알려주는 투로 하세요.
 
 {
   "ko": "자연스러운 한국어 번역 (한두 문장)",

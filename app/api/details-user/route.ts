@@ -10,7 +10,8 @@ const client = new OpenAI({
 // ✅ 사용자(내) 말풍선용: 문장 교정 + 번역/문법/TIP
 async function generateUserDetails(text: string) {
   const prompt = `
-다음은 한국인 학습자가 쓴 스페인어 문장이야.
+다음은 스페인어 A1–A2 수준의 한국인 학생이 쓴 문장이야.
+20세 스페인인 교환학생 친구가 나에게 스페인어 알려주는 말투로 말해주세요.
 이 문장을 자연스러운 스페인어로 고쳐 주고,
 아래 JSON 형식으로만 출력하세요.
 
