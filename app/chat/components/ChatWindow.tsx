@@ -1175,6 +1175,19 @@ if (!saveAssistantRes.ok || saveAssistantData.ok === false) {
               </button>
             </>
           )}
+            {/* ⚠️ 민감한 대화 주의 문구 */}
+          <p
+            style={{
+              marginTop: "8px",
+              fontSize: "11px",
+              color: "#9ca3af",
+              textAlign: "center",
+              lineHeight: 1.5,
+              whiteSpace: "pre-line",
+            }}
+          >
+            {"⚠️ 민감한 개인정보(실명, 연락처, 계좌번호, 건강정보 등)는 입력하지 말아 주세요.\nAI 답변은 틀릴 수 있으니 중요한 내용은 꼭 다시 확인해 주세요."}
+          </p>
         </div>
       </div>
 
