@@ -3,9 +3,26 @@
 
 import { supabase } from "@/lib/supabaseClient";
 import { useRouter } from "next/navigation";
+import { useEffect } from "react";
 
 export default function LoginPage() {
   const router = useRouter();
+
+  // 🔥 KakaoTalk / Instagram / Facebook 인앱 브라우저 감지
+  useEffect(() => {
+    const ua = navigator.userAgent.toLowerCase();
+    const isInApp =
+      ua.includes("kakao") ||
+      ua.includes("instagram") ||
+      ua.includes("fb") ||
+      ua.includes("facebook");
+
+    if (isInApp) {
+      alert(
+        "Google 로그인이 차단되는 환경입니다.\nChrome 또는 Safari에서 다시 열어주세요!"
+      );
+    }
+  }, []);
 
   const loginWithGoogle = async () => {
     const { error } = await supabase.auth.signInWithOAuth({
@@ -85,7 +102,6 @@ export default function LoginPage() {
             marginBottom: "12px",
           }}
         >
-          {/* 간단한 G 아이콘 느낌 */}
           <span
             style={{
               width: "18px",
