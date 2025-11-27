@@ -21,11 +21,17 @@ type ChatMessage = {
   detailsError?: boolean;        // ✅ 더보기 불러오기 실패 여부
 };
 
+type StudyState = {
+  cardId: string;
+  korean: string;
+  hint?: string;
+} | null;
+
 export default function ChatWindow() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+    const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [isSending, setIsSending] = useState(false);
   const typingIntervalRef = useRef<NodeJS.Timeout | null>(null);
@@ -35,6 +41,8 @@ export default function ChatWindow() {
   // 🔊 TTS 관련 상태 & 캐시
   const audioCacheRef = useRef<Map<string, string>>(new Map());
   const [playingMessageId, setPlayingMessageId] = useState<string | null>(null);
+  const currentAudioRef = useRef<HTMLAudioElement | null>(null); // ✅ 현재 재생 중인 오디오
+
 
   const typingSpeed = 20; // ms 단위, 숫자 낮출수록 더 빨리 타이핑됨
   const makeId = () => `${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -51,6 +59,12 @@ export default function ChatWindow() {
   const [isGuest, setIsGuest] = useState(false);
   const [guestTrialCount, setGuestTrialCount] = useState(0); // 🔄 이제 메모리로만 관리
   const [showLoginModal, setShowLoginModal] = useState(false);
+
+  // ✅ 학습 모달 상태
+  const [studyState, setStudyState] = useState<StudyState>(null);
+  const [isStudyModalOpen, setIsStudyModalOpen] = useState(false);
+  const [isStudyLoading, setIsStudyLoading] = useState(false);
+
 
   // 🔐 브라우저 Supabase 세션에서 access token 가져오기
   const getAccessToken = async () => {
@@ -348,17 +362,41 @@ export default function ChatWindow() {
       // 게스트 모드에서는 TTS 사용 안 함
       if (isGuest) return;
 
-      // 1️⃣ 이미 프론트 캐시에 URL이 있으면 그대로 재생
-      if (audioCacheRef.current.has(message.id)) {
-        const existingUrl = audioCacheRef.current.get(message.id)!;
-        const audio = new Audio(existingUrl);
-        setPlayingMessageId(message.id);
-        audio.play();
-        audio.onended = () => setPlayingMessageId(null);
-        audio.onerror = () => setPlayingMessageId(null);
+      // ✅ 0. 이미 이 메시지가 재생 중이면 → 정지(토글)
+      if (playingMessageId === message.id && currentAudioRef.current) {
+        currentAudioRef.current.pause();
+        currentAudioRef.current.currentTime = 0;
+        currentAudioRef.current = null;
+        setPlayingMessageId(null);
         return;
       }
 
+      // ✅ 1. 다른 오디오가 재생 중이면 먼저 정지
+      if (currentAudioRef.current) {
+        currentAudioRef.current.pause();
+        currentAudioRef.current.currentTime = 0;
+        currentAudioRef.current = null;
+      }
+
+      // 2️⃣ 캐시에 URL 있으면 그대로 재생
+      if (audioCacheRef.current.has(message.id)) {
+        const existingUrl = audioCacheRef.current.get(message.id)!;
+        const audio = new Audio(existingUrl);
+        currentAudioRef.current = audio;
+        setPlayingMessageId(message.id);
+        audio.play();
+        audio.onended = () => {
+          setPlayingMessageId(null);
+          currentAudioRef.current = null;
+        };
+        audio.onerror = () => {
+          setPlayingMessageId(null);
+          currentAudioRef.current = null;
+        };
+        return;
+      }
+
+      // 3️⃣ 캐시에 없으면 서버에 요청
       if (!sessionId) {
         alert("세션 정보가 없어서 음성을 재생할 수 없어요 🥲");
         return;
@@ -366,13 +404,12 @@ export default function ChatWindow() {
 
       setPlayingMessageId(message.id);
 
-      // 2️⃣ 서버에 TTS URL 요청 (세션 ID도 함께 전송)
       const res = await fetch("/api/tts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           text: message.content,
-          sessionId, // ✅ 어떤 세션/메시지인지 서버가 알 수 있게
+          sessionId,
         }),
       });
 
@@ -389,19 +426,30 @@ export default function ChatWindow() {
         throw new Error("TTS URL이 응답에 없어요");
       }
 
-      // 3️⃣ 프론트 캐시에 URL 저장 (Supabase public URL)
+      // 4️⃣ 캐시에 저장 후 재생
       audioCacheRef.current.set(message.id, url);
 
       const audio = new Audio(url);
+      currentAudioRef.current = audio;
       audio.play();
-      audio.onended = () => setPlayingMessageId(null);
-      audio.onerror = () => setPlayingMessageId(null);
+      audio.onended = () => {
+        setPlayingMessageId(null);
+        currentAudioRef.current = null;
+      };
+      audio.onerror = () => {
+        setPlayingMessageId(null);
+        currentAudioRef.current = null;
+      };
     } catch (err) {
       console.error(err);
       alert("음성 재생 중 오류가 발생했어 😢");
       setPlayingMessageId(null);
+      if (currentAudioRef.current) {
+        currentAudioRef.current = null;
+      }
     }
   };
+
 
   // 🔐 Google 로그인 (로그인 모달에서 사용)
   const loginWithGoogle = async () => {
@@ -490,7 +538,7 @@ export default function ChatWindow() {
     audioCacheRef.current.clear();
   };
 
-  // ✅ 현재 세션을 DB에서 완전히 삭제 + 화면 초기화 (게스트 모드일 때는 그냥 프론트만 리셋)
+   // ✅ 현재 세션을 DB에서 완전히 삭제 + 화면 초기화 (게스트 모드일 때는 그냥 프론트만 리셋)
   const handleDeleteCurrentSession = async () => {
     console.log("Deleting session id:", sessionId);
 
@@ -538,8 +586,58 @@ export default function ChatWindow() {
     }
   };
 
+  // ✅ 학습 모드 시작 (학습 모달 띄우기)
+  const handleStartStudy = async (messageId: string) => {
+    // 게스트 모드에서는 학습 기능 제한
+    if (isGuest) {
+      alert("학습 기능은 로그인 후 사용할 수 있어요 🙂");
+      return;
+    }
+
+    if (!sessionId) {
+      alert("세션 정보가 없어 학습을 시작할 수 없어요.");
+      return;
+    }
+
+    try {
+      setIsStudyLoading(true);
+
+      const accessToken = await getAccessToken();
+
+      const res = await fetch("/api/learning/prepare", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+        },
+        body: JSON.stringify({ sessionId, messageId }),
+      });
+
+      if (!res.ok) {
+        console.error("learning/prepare error:", await res.json().catch(() => ({})));
+        alert("학습 문장을 준비하는 중 오류가 발생했어요.");
+        return;
+      }
+
+      const data = await res.json();
+
+      setStudyState({
+        cardId: data.cardId,
+        korean: data.korean,
+        hint: data.hint,
+      });
+      setIsStudyModalOpen(true);
+    } catch (e) {
+      console.error("handleStartStudy error:", e);
+      alert("학습 준비 중 오류가 발생했어요.");
+    } finally {
+      setIsStudyLoading(false);
+    }
+  };
+
   // ✅ 버튼을 눌렀을 때 Juan이 먼저 인사
   const handleStartConversation = async () => {
+
     if (isStarting) return;
 
     setIsStarting(true);
@@ -798,7 +896,7 @@ if (!saveAssistantRes.ok || saveAssistantData.ok === false) {
     }
   };
 
-  return (
+    return (
     <>
       <div
         style={{
@@ -912,25 +1010,43 @@ if (!saveAssistantRes.ok || saveAssistantData.ok === false) {
                       alignSelf: isUserMsg ? "flex-end" : "flex-start",
                     }}
                   >
-                    {/* ✅ 내 말풍선: 왼쪽에 + 버튼 */}
+                    {/* ✅ 내 말풍선: 왼쪽에 + 버튼 + 학습 버튼 */}
                     {isUserMsg && (
-                      <button
-                        onClick={() =>
-                          toggleUserDetails(msg.id, msg.content, hasDetails)
-                        }
-                        style={{
-                          fontSize: "14px",
-                          padding: "4px 8px",
-                          borderRadius: "999px",
-                          border: "1px solid #555",
-                          backgroundColor: "#111",
-                          color: "white",
-                          cursor: "pointer",
-                        }}
-                        aria-label={isExpanded ? "상세 접기" : "상세 더보기"}
-                      >
-                        {isExpanded ? "−" : "+"}
-                      </button>
+                      <>
+                        <button
+                          onClick={() =>
+                            toggleUserDetails(msg.id, msg.content, hasDetails)
+                          }
+                          style={{
+                            fontSize: "14px",
+                            padding: "4px 8px",
+                            borderRadius: "999px",
+                            border: "1px solid #555",
+                            backgroundColor: "#111",
+                            color: "white",
+                            cursor: "pointer",
+                          }}
+                          aria-label={isExpanded ? "상세 접기" : "상세 더보기"}
+                        >
+                          {isExpanded ? "−" : "+"}
+                        </button>
+
+                        <button
+                          onClick={() => handleStartStudy(msg.id)}
+                          style={{
+                            fontSize: "12px",
+                            padding: "4px 8px",
+                            borderRadius: "999px",
+                            border: "1px solid #16a34a",
+                            backgroundColor: "#111",
+                            color: "#bbf7d0",
+                            cursor: isStudyLoading ? "not-allowed" : "pointer",
+                          }}
+                          disabled={isStudyLoading}
+                        >
+                          학습
+                        </button>
+                      </>
                     )}
 
                     {/* 말풍선 */}
@@ -947,7 +1063,7 @@ if (!saveAssistantRes.ok || saveAssistantData.ok === false) {
                       {msg.content}
                     </div>
 
-                    {/* GPT 말풍선: 오른쪽 + 버튼 + 스피커 */}
+                    {/* GPT 말풍선: 오른쪽 + 버튼 + 학습 + 스피커 */}
                     {isAssistant && (
                       <div style={{ display: "flex", gap: "4px" }}>
                         <button
@@ -970,11 +1086,26 @@ if (!saveAssistantRes.ok || saveAssistantData.ok === false) {
                           {isExpanded ? "−" : "+"}
                         </button>
 
-                        {/* 게스트 모드에서는 TTS 버튼 숨김 */}
+                        <button
+                          onClick={() => handleStartStudy(msg.id)}
+                          style={{
+                            fontSize: "12px",
+                            padding: "4px 8px",
+                            borderRadius: "999px",
+                            border: "1px solid #16a34a",
+                            backgroundColor: "#111",
+                            color: "#bbf7d0",
+                            cursor: isStudyLoading ? "not-allowed" : "pointer",
+                          }}
+                          disabled={isStudyLoading}
+                        >
+                          학습
+                        </button>
+
+                                                {/* 게스트 모드에서는 TTS 버튼 숨김 */}
                         {!isGuest && (
                           <button
                             onClick={() => handlePlayTTS(msg)}
-                            disabled={playingMessageId === msg.id}
                             style={{
                               fontSize: "16px",
                               padding: "4px 8px",
@@ -982,14 +1113,15 @@ if (!saveAssistantRes.ok || saveAssistantData.ok === false) {
                               border: "1px solid #555",
                               backgroundColor: "#111",
                               color: "white",
-                              cursor:
-                                playingMessageId === msg.id
-                                  ? "default"
-                                  : "pointer",
+                              cursor: "pointer",
                             }}
-                            aria-label="스페인어 문장 듣기"
+                            aria-label={
+                              playingMessageId === msg.id
+                                ? "스페인어 문장 재생 중, 정지하기"
+                                : "스페인어 문장 듣기"
+                            }
                           >
-                            {playingMessageId === msg.id ? "🔊" : "🔈"}
+                            {playingMessageId === msg.id ? "⏹" : "🔈"}
                           </button>
                         )}
                       </div>
@@ -1175,7 +1307,7 @@ if (!saveAssistantRes.ok || saveAssistantData.ok === false) {
               </button>
             </>
           )}
-            {/* ⚠️ 민감한 대화 주의 문구 */}
+          {/* ⚠️ 민감한 대화 주의 문구 */}
           <p
             style={{
               marginTop: "8px",
@@ -1186,7 +1318,9 @@ if (!saveAssistantRes.ok || saveAssistantData.ok === false) {
               whiteSpace: "pre-line",
             }}
           >
-            {"⚠️ 민감한 개인정보(실명, 연락처, 계좌번호, 건강정보 등)는 입력하지 말아 주세요.\nAI 답변은 틀릴 수 있으니 중요한 내용은 꼭 다시 확인해 주세요."}
+            {
+              "⚠️ 민감한 개인정보(실명, 연락처, 계좌번호, 건강정보 등)는 입력하지 말아 주세요.\nAI 답변은 틀릴 수 있으니 중요한 내용은 꼭 다시 확인해 주세요."
+            }
           </p>
         </div>
       </div>
@@ -1272,6 +1406,280 @@ if (!saveAssistantRes.ok || saveAssistantData.ok === false) {
           </div>
         </div>
       )}
+
+      {/* 📚 학습 모달 */}
+      <StudyModal
+        isOpen={isStudyModalOpen}
+        onClose={() => {
+          setIsStudyModalOpen(false);
+          setStudyState(null);
+        }}
+        state={studyState}
+      />
     </>
   );
 }
+type StudyModalProps = {
+  isOpen: boolean;
+  onClose: () => void;
+  state: StudyState;
+};
+
+function StudyModal({ isOpen, onClose, state }: StudyModalProps) {
+  const [answer, setAnswer] = useState("");
+  const [feedback, setFeedback] = useState<{
+    correct_answer: string;
+    tip: string;
+    is_correct: boolean;
+  } | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  if (!isOpen || !state) return null;
+
+  const handleSubmit = async () => {
+    const trimmed = answer.trim();
+    if (!trimmed) return;
+
+    try {
+      setIsSubmitting(true);
+
+      // 🔐 Supabase 세션에서 access token 가져오기
+      const { data } = await supabase.auth.getSession();
+      const accessToken = data.session?.access_token ?? null;
+
+      const res = await fetch("/api/learning/answer", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+        },
+        body: JSON.stringify({
+          cardId: state.cardId,
+          userAnswer: trimmed,
+        }),
+      });
+
+      if (!res.ok) {
+        console.error("learning/answer error:", await res.json().catch(() => ({})));
+        alert("피드백을 불러오는 데 실패했어요.");
+        return;
+      }
+
+      const dataRes = await res.json();
+      setFeedback(dataRes);
+    } catch (e) {
+      console.error("StudyModal handleSubmit error:", e);
+      alert("피드백 요청 중 오류가 발생했어요.");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleRetry = () => {
+    setAnswer("");
+    setFeedback(null); // 🔁 다시: 입력/피드백 초기화
+  };
+
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        backgroundColor: "rgba(0,0,0,0.7)",
+        display: "flex",
+        justifyContent: "center",
+        alignItems: "center",
+        zIndex: 60,
+      }}
+    >
+      <div
+        style={{
+          width: "100%",
+          maxWidth: "480px",
+          backgroundColor: "#111827",
+          borderRadius: "16px",
+          padding: "20px 24px",
+          boxShadow: "0 10px 30px rgba(0,0,0,0.6)",
+          position: "relative",
+        }}
+      >
+        {/* 헤더 */}
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            marginBottom: "12px",
+          }}
+        >
+          <h2
+            style={{
+              color: "#f9fafb",
+              fontSize: "18px",
+              fontWeight: 600,
+              margin: 0,
+            }}
+          >
+            학습 모드
+          </h2>
+          <button
+            onClick={onClose}
+            style={{
+              border: "none",
+              background: "transparent",
+              color: "#9ca3af",
+              fontSize: "18px",
+              cursor: "pointer",
+            }}
+          >
+            ×
+          </button>
+        </div>
+
+        {/* 한국어 문장 + 힌트 */}
+        <div style={{ marginBottom: "12px" }}>
+          <p
+            style={{
+              fontSize: "13px",
+              color: "#e5e7eb",
+              marginBottom: "4px",
+            }}
+          >
+            한국어 문장
+          </p>
+          <div
+            style={{
+              backgroundColor: "#1f2937",
+              borderRadius: "8px",
+              padding: "8px 10px",
+              fontSize: "13px",
+              color: "#f9fafb",
+              whiteSpace: "pre-wrap",
+            }}
+          >
+            {state.korean}
+          </div>
+          {state.hint && (
+            <p
+              style={{
+                marginTop: "6px",
+                fontSize: "12px",
+                color: "#9ca3af",
+              }}
+            >
+              힌트: {state.hint}
+            </p>
+          )}
+        </div>
+
+        {/* 내가 적는 스페인어 문장 */}
+        <div style={{ marginBottom: "12px" }}>
+          <p
+            style={{
+              fontSize: "13px",
+              color: "#e5e7eb",
+              marginBottom: "4px",
+            }}
+          >
+            스페인어로 다시 써보기
+          </p>
+          <textarea
+            value={answer}
+            onChange={(e) => setAnswer(e.target.value)}
+            rows={2}
+            placeholder="여기에 스페인어로 문장을 적어주세요."
+            style={{
+              width: "100%",
+              resize: "none",
+              backgroundColor: "#111827",
+              color: "#f9fafb",
+              borderRadius: "8px",
+              border: "1px solid #374151",
+              padding: "8px",
+              fontSize: "13px",
+              outline: "none",
+            }}
+          />
+        </div>
+
+        {/* GPT 피드백 */}
+        {feedback && (
+          <div
+            style={{
+              marginBottom: "12px",
+              backgroundColor: "#111827",
+              borderRadius: "8px",
+              border: "1px solid #374151",
+              padding: "8px 10px",
+              fontSize: "13px",
+              color: "#f9fafb",
+            }}
+          >
+            <div style={{ marginBottom: "6px" }}>
+              <strong>정답 예시: </strong>
+              <span>{feedback.correct_answer}</span>
+            </div>
+            <div style={{ marginBottom: "4px" }}>
+              <strong>네이티브 TIP: </strong>
+              <span>{feedback.tip}</span>
+            </div>
+            <div
+              style={{
+                marginTop: "4px",
+                fontSize: "11px",
+                color: "#9ca3af",
+              }}
+            >
+              채점 결과:{" "}
+              {feedback.is_correct ? "거의 정답이에요! 👏" : "조금 더 연습해보자 🙂"}
+            </div>
+          </div>
+        )}
+
+        {/* 버튼들 */}
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            marginTop: "4px",
+          }}
+        >
+          <button
+            onClick={handleRetry}
+            style={{
+              borderRadius: "999px",
+              border: "1px solid #4b5563",
+              padding: "6px 12px",
+              fontSize: "13px",
+              backgroundColor: "transparent",
+              color: "#e5e7eb",
+              cursor: "pointer",
+            }}
+          >
+            다시
+          </button>
+
+          <button
+            onClick={handleSubmit}
+            disabled={isSubmitting || !answer.trim()}
+            style={{
+              borderRadius: "999px",
+              border: "none",
+              padding: "6px 16px",
+              fontSize: "13px",
+              fontWeight: 500,
+              backgroundColor: isSubmitting ? "#4b5563" : "#2563eb",
+              color: "#f9fafb",
+              cursor:
+                isSubmitting || !answer.trim() ? "not-allowed" : "pointer",
+              opacity: isSubmitting || !answer.trim() ? 0.7 : 1,
+            }}
+          >
+            {isSubmitting ? "채점 중..." : "제출"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+

@@ -39,7 +39,6 @@ export async function POST(req: Request) {
 
     const userId = user.id;
 
-    
     // 1️⃣ 이 세션이 진짜 이 유저의 것인지 확인
     const { data: session, error: sessionError } = await supabaseServer
       .from("chat_sessions")
@@ -83,7 +82,46 @@ export async function POST(req: Request) {
       // mp3 삭제 실패했다고 해서 DB 삭제까지 막을 필요는 없으니 계속 진행
     }
 
-    // 3️⃣ 세션 삭제 (FK ON DELETE CASCADE 덕분에 메시지도 같이 삭제)
+    // 3️⃣ 학습용 데이터(learning_attempts, learning_cards) 삭제
+    try {
+      // 3-1) 이 세션에 연결된 learning_cards 조회
+      const { data: cards, error: cardsError } = await supabaseServer
+        .from("learning_cards")
+        .select("id")
+        .eq("session_id", sessionId)
+        .eq("user_id", userId);
+
+      if (cardsError) {
+        console.error("learning_cards select error:", cardsError);
+      } else if (cards && cards.length > 0) {
+        const cardIds = cards.map((c) => c.id);
+
+        // 3-2) 우선 attempts 삭제
+        const { error: attemptsDeleteError } = await supabaseServer
+          .from("learning_attempts")
+          .delete()
+          .in("learning_card_id", cardIds);
+
+        if (attemptsDeleteError) {
+          console.error("learning_attempts delete error:", attemptsDeleteError);
+        }
+
+        // 3-3) cards 삭제
+        const { error: cardsDeleteError } = await supabaseServer
+          .from("learning_cards")
+          .delete()
+          .in("id", cardIds);
+
+        if (cardsDeleteError) {
+          console.error("learning_cards delete error:", cardsDeleteError);
+        }
+      }
+    } catch (learningErr) {
+      console.error("Learning data cleanup error:", learningErr);
+      // 학습 데이터 삭제 실패해도 세션 삭제는 계속 진행
+    }
+
+    // 4️⃣ 세션 삭제 (FK ON DELETE CASCADE 덕분에 메시지도 같이 삭제)
     const { error: deleteError } = await supabaseServer
       .from("chat_sessions")
       .delete()
