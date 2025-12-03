@@ -128,26 +128,13 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 2️⃣ GPT로 피드백 생성
+    // 2️⃣ GPT로 피드백 생성 (DB 저장 X)
     const feedback = await generateFeedback(
       card.corrected_spanish as string,
       String(userAnswer)
     );
 
-    // 3️⃣ DB에 attempt 저장
-    const { error: attemptError } = await supabaseServer
-      .from("learning_attempts")
-      .insert({
-        learning_card_id: cardId,
-        user_answer_spanish: userAnswer,
-        feedback, // jsonb 컬럼
-      });
-
-    if (attemptError) {
-      console.error("learning_attempts insert error:", attemptError);
-    }
-
-    // 4️⃣ 모달에 바로 쓸 피드백 반환
+    // 3️⃣ 모달에 바로 쓸 피드백만 반환 (attempts 테이블 저장 안 함)
     return NextResponse.json(feedback);
   } catch (e) {
     console.error("learning/answer 서버 오류:", e);
