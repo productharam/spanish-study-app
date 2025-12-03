@@ -26,7 +26,7 @@ JSON 형식으로만 출력해:
 `;
 
   const res = await client.chat.completions.create({
-    model: "gpt-5.1", // ✅ 한이 쓰는 기본 모델
+    model: "gpt-5.1",
     messages: [
       {
         role: "system",
@@ -40,21 +40,19 @@ JSON 형식으로만 출력해:
 
   const raw = res.choices[0].message.content ?? "";
 
-  let korean = "";
-  let hint = "";
-
   try {
     const parsed = JSON.parse(raw);
-    korean = typeof parsed.korean === "string" ? parsed.korean : "";
-    hint = typeof parsed.hint === "string" ? parsed.hint : "";
+    return {
+      korean: typeof parsed.korean === "string" ? parsed.korean : spanishSentence,
+      hint: typeof parsed.hint === "string" ? parsed.hint : "",
+    };
   } catch (e) {
     console.error("JSON parse error in generateKoreanPrompt:", raw);
-    // 파싱이 깨져도 학습 기능 전체가 죽지 않도록 fallback
-    korean = spanishSentence;
-    hint = "";
+    return {
+      korean: spanishSentence,
+      hint: "",
+    };
   }
-
-  return { korean, hint };
 }
 
 export async function POST(req: NextRequest) {
@@ -76,20 +74,27 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 🔐 유저 가져오기 (실패해도 학습은 계속 진행)
+    // 🔐 Authorization 헤더에서 JWT 추출
+    const authHeader = req.headers.get("authorization"); // 소문자/대문자 둘 다 가능
     let userId: string | null = null;
-    try {
+
+    if (authHeader?.startsWith("Bearer ")) {
+      const token = authHeader.slice("Bearer ".length).trim();
+
+      // ✅ JWT로 사용자 조회
       const {
         data: { user },
         error: authError,
-      } = await supabaseServer.auth.getUser();
+      } = await supabaseServer.auth.getUser(token);
 
       if (authError) {
-        console.error("learning/prepare auth error:", authError);
+        console.error("learning/prepare auth error:", authError.message);
       }
+
       userId = user?.id ?? null;
-    } catch (e) {
-      console.error("learning/prepare auth exception:", e);
+      console.log("learning/prepare userId:", userId);
+    } else {
+      console.log("learning/prepare: Authorization 헤더 없음");
     }
 
     // ✅ 1단계: userId가 있을 때만 Supabase 캐싱 시도
@@ -117,7 +122,7 @@ export async function POST(req: NextRequest) {
         }
 
         if (existingCard) {
-          // 🔁 이미 카드가 있으면 GPT 호출 없이 바로 반환 (👉 비용 절약)
+          // 🔁 이미 카드가 있으면 GPT 호출 없이 바로 반환
           return NextResponse.json({
             ok: true,
             cardId: existingCard.id,
@@ -127,14 +132,13 @@ export async function POST(req: NextRequest) {
         }
       } catch (e) {
         console.error("learning_cards select 예외:", e);
-        // 여기서 에러 나도 그냥 아래 GPT 경로로 진행
       }
     }
 
     // ✅ 2단계: 카드가 없거나 userId가 없으면 GPT 호출
     const { korean, hint } = await generateKoreanPrompt(baseSpanish);
 
-    // ✅ 3단계: userId가 있을 때만 새 카드 저장 (없으면 캐싱 없이 그냥 사용)
+    // ✅ 3단계: userId가 있을 때만 새 카드 저장
     if (userId) {
       try {
         const { data: inserted, error: insertError } = await supabaseServer
@@ -152,7 +156,6 @@ export async function POST(req: NextRequest) {
 
         if (insertError || !inserted) {
           console.error("learning_cards insert error:", insertError);
-          // 저장 실패해도 학습은 진행
           return NextResponse.json({
             ok: true,
             cardId: null,
@@ -170,7 +173,6 @@ export async function POST(req: NextRequest) {
         });
       } catch (e) {
         console.error("learning_cards insert 예외:", e);
-        // DB에 전혀 접근이 안되어도, GPT 결과만으로 응답
         return NextResponse.json({
           ok: true,
           cardId: null,

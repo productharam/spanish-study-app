@@ -35,7 +35,7 @@ ${userAnswer}
 `;
 
   const res = await client.chat.completions.create({
-    model: "gpt-5.1", // ✅ 통일
+    model: "gpt-5.1",
     messages: [
       { role: "system", content: systemPrompt },
       { role: "user", content: userPrompt },
@@ -45,24 +45,21 @@ ${userAnswer}
 
   const raw = res.choices[0].message.content ?? "{}";
 
-  let parsed: any = {};
   try {
-    parsed = JSON.parse(raw);
+    const parsed = JSON.parse(raw);
+    return {
+      correct_answer: parsed.correct_answer ?? correctSentence,
+      tip: parsed.tip ?? "",
+      is_correct: Boolean(parsed.is_correct),
+    };
   } catch (e) {
     console.error("JSON parse error in generateFeedback:", raw);
-    // 최소한 형태는 맞추자 (완전 망가지면 is_correct=false로 처리)
     return {
       correct_answer: correctSentence,
       tip: "피드백 생성 중 오류가 발생했어요. 정답 예문만 참고해 주세요.",
       is_correct: false,
     };
   }
-
-  return {
-    correct_answer: parsed.correct_answer as string,
-    tip: parsed.tip as string,
-    is_correct: Boolean(parsed.is_correct),
-  };
 }
 
 export async function POST(req: NextRequest) {
@@ -76,17 +73,31 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 🔐 유저 확인
-    const {
-      data: { user },
-      error: authError,
-    } = await supabaseServer.auth.getUser();
+    // 🔐 Authorization 헤더에서 JWT 추출
+    const authHeader = req.headers.get("authorization");
+    let userId: string | null = null;
 
-    if (authError || !user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    if (authHeader?.startsWith("Bearer ")) {
+      const token = authHeader.slice("Bearer ".length).trim();
+
+      const {
+        data: { user },
+        error: authError,
+      } = await supabaseServer.auth.getUser(token);
+
+      if (authError) {
+        console.error("learning/answer auth error:", authError.message);
+      }
+
+      userId = user?.id ?? null;
+      console.log("learning/answer userId:", userId);
+    } else {
+      console.log("learning/answer: Authorization 헤더 없음");
     }
 
-    const userId = user.id as string;
+    if (!userId) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
 
     // 1️⃣ learning_cards에서 정답 문장 가져오기 (본인 카드만)
     const { data: card, error: cardError } = await supabaseServer
@@ -95,8 +106,15 @@ export async function POST(req: NextRequest) {
       .eq("id", cardId)
       .maybeSingle();
 
-    if (cardError || !card) {
-      console.error("learning_cards not found:", cardError);
+    if (cardError) {
+      console.error("learning_cards select error:", cardError);
+      return NextResponse.json(
+        { error: "학습 카드를 조회하는 중 오류가 발생했어요." },
+        { status: 500 }
+      );
+    }
+
+    if (!card) {
       return NextResponse.json(
         { error: "학습 카드를 찾을 수 없습니다." },
         { status: 404 }
@@ -104,8 +122,10 @@ export async function POST(req: NextRequest) {
     }
 
     if (card.user_id !== userId) {
-      // 혹시 모를 다른 사람 카드 접근 차단
-      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+      return NextResponse.json(
+        { error: "본인의 학습 카드만 채점할 수 있습니다." },
+        { status: 403 }
+      );
     }
 
     // 2️⃣ GPT로 피드백 생성
@@ -114,7 +134,7 @@ export async function POST(req: NextRequest) {
       String(userAnswer)
     );
 
-    // 3️⃣ DB에 attempt 저장 (비동기 에러는 로깅만 하고, 사용자 응답은 계속)
+    // 3️⃣ DB에 attempt 저장
     const { error: attemptError } = await supabaseServer
       .from("learning_attempts")
       .insert({

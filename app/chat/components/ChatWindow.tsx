@@ -6,43 +6,46 @@ import { supabase } from "@/lib/supabaseClient";
 
 type MessageDetails = {
   correction?: string; // 0. 스페인어 문장 교정 (내 말풍선 전용)
-  ko: string;          // 1. 한글 번역
-  en: string;          // 2. 영어 번역
-  grammar: string;     // 3. 문장 문법 구조
-  tip: string;         // 4. 네이티브 TIP
+  ko: string; // 1. 한글 번역
+  en: string; // 2. 영어 번역
+  grammar: string; // 3. 문장 문법 구조
+  tip: string; // 4. 네이티브 TIP
 };
 
 type ChatMessage = {
   id: string;
   role: "user" | "assistant";
   content: string;
-  details?: MessageDetails;      // ✅ 더보기 내용
-  isDetailsLoading?: boolean;    // ✅ 더보기 로딩 상태
-  detailsError?: boolean;        // ✅ 더보기 불러오기 실패 여부
+  details?: MessageDetails; // ✅ 더보기 내용
+  isDetailsLoading?: boolean; // ✅ 더보기 로딩 상태
+  detailsError?: boolean; // ✅ 더보기 불러오기 실패 여부
 };
 
-type StudyState = {
-  cardId: string;
+// ✅ 메시지 1개당 학습 카드 정보
+type StudyCard = {
+  cardId: string | null;
   korean: string;
   hint?: string;
-} | null;
+};
+
+// ✅ messageId -> StudyCard 매핑
+type StudyState = Record<string, StudyCard>;
 
 export default function ChatWindow() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
-    const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [isSending, setIsSending] = useState(false);
   const typingIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   const [expandedMessageIds, setExpandedMessageIds] = useState<string[]>([]);
 
-    // 🔊 TTS 관련 상태 & 캐시
+  // 🔊 TTS 관련 상태 & 캐시
   const audioCacheRef = useRef<Map<string, string>>(new Map());
   const [playingMessageId, setPlayingMessageId] = useState<string | null>(null);
-  const currentAudioRef = useRef<HTMLAudioElement | null>(null); // ✅ 추가
-
+  const currentAudioRef = useRef<HTMLAudioElement | null>(null);
 
   const typingSpeed = 20; // ms 단위, 숫자 낮출수록 더 빨리 타이핑됨
   const makeId = () => `${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -60,11 +63,11 @@ export default function ChatWindow() {
   const [guestTrialCount, setGuestTrialCount] = useState(0); // 🔄 이제 메모리로만 관리
   const [showLoginModal, setShowLoginModal] = useState(false);
 
-  // ✅ 학습 모달 상태
-  const [studyState, setStudyState] = useState<StudyState>(null);
+  // ✅ 학습 상태: 메시지별 학습 카드 캐시
+  const [studyState, setStudyState] = useState<StudyState>({});
   const [isStudyModalOpen, setIsStudyModalOpen] = useState(false);
+  const [activeStudyMessageId, setActiveStudyMessageId] = useState<string | null>(null);
   const [isStudyLoading, setIsStudyLoading] = useState(false);
-
 
   // 🔐 브라우저 Supabase 세션에서 access token 가져오기
   const getAccessToken = async () => {
@@ -357,7 +360,7 @@ export default function ChatWindow() {
   };
 
   // 🔊 TTS: 메시지 1개에 대해 한 번만 API 호출, 이후 재사용
-    const handlePlayTTS = async (message: ChatMessage) => {
+  const handlePlayTTS = async (message: ChatMessage) => {
     try {
       // 게스트 모드에서는 TTS 사용 안 함
       if (isGuest) return;
@@ -451,23 +454,20 @@ export default function ChatWindow() {
     }
   };
 
-
   // 🔐 Google 로그인 (로그인 모달에서 사용)
   const loginWithGoogle = async () => {
     try {
-      // 지금 내가 있는 도메인 (localhost or vercel)
       const origin =
         typeof window !== "undefined"
           ? window.location.origin
           : "http://localhost:3000";
 
-      // 로그인 후 돌아올 주소
       const redirectTo = `${origin}/chat`;
 
       const { error } = await supabase.auth.signInWithOAuth({
         provider: "google",
         options: {
-          redirectTo, // 예: http://localhost:3000/chat  또는  https://spanish-study-app-k3xh.vercel.app/chat
+          redirectTo,
         },
       });
 
@@ -481,12 +481,10 @@ export default function ChatWindow() {
     }
   };
 
-  // ❌ 로그인 모달 닫기 (그대로 /chat에 남기기)
   const closeLoginModal = () => {
     setShowLoginModal(false);
   };
 
-  // 🔙 메인화면으로 나가기
   const goHome = () => {
     router.push("/");
   };
@@ -527,19 +525,19 @@ export default function ChatWindow() {
     }, typingSpeed);
   };
 
-  // ✅ 새 대화 시작 (프론트 상태만 리셋)
   const handleNewChat = () => {
     setMessages([]);
     setSessionId(null);
     setHasStarted(false);
     setExpandedMessageIds([]);
     setPlayingMessageId(null);
+    setStudyState({});
+    setActiveStudyMessageId(null);
 
     audioCacheRef.current.forEach((url) => URL.revokeObjectURL(url));
     audioCacheRef.current.clear();
   };
 
-   // ✅ 현재 세션을 DB에서 완전히 삭제 + 화면 초기화 (게스트 모드일 때는 그냥 프론트만 리셋)
   const handleDeleteCurrentSession = async () => {
     console.log("Deleting session id:", sessionId);
 
@@ -560,7 +558,7 @@ export default function ChatWindow() {
     if (!confirmDelete) return;
 
     try {
-      const accessToken = await getAccessToken(); // 🔐 추가
+      const accessToken = await getAccessToken();
 
       const res = await fetch("/api/session/delete", {
         method: "POST",
@@ -578,7 +576,6 @@ export default function ChatWindow() {
         return;
       }
 
-      // ✅ 프론트 상태도 리셋
       handleNewChat();
       alert("현재 대화를 깔끔하게 삭제했어요 ✅");
     } catch (e) {
@@ -587,83 +584,90 @@ export default function ChatWindow() {
     }
   };
 
-  // ✅ 학습 모드 시작 (학습 모달 띄우기)
-    // ✅ 학습 모드 시작 (학습 모달 띄우기) — 메시지 전체를 받도록 변경
-  // ✅ 학습 모드 시작 (학습 모달 띄우기)
-const handleStartStudy = async (message: ChatMessage) => {
-  // 게스트 모드에서는 학습 기능 제한
-  if (isGuest) {
-    alert("학습 기능은 로그인 후 사용할 수 있어요 🙂");
-    return;
-  }
-
-  // 1️⃣ 기준 스페인어 문장 선택
-  let baseSpanish = "";
-
-  if (message.role === "user" && message.details?.correction) {
-    baseSpanish = message.details.correction;
-  } else {
-    baseSpanish = message.content;
-  }
-
-  if (!baseSpanish || !baseSpanish.trim()) {
-    alert("학습에 사용할 스페인어 문장이 없어요.");
-    return;
-  }
-
-  try {
-    setIsStudyLoading(true);
-
-    // 🔐 access token 가져오기 (다른 API들처럼)
-    const accessToken = await getAccessToken();
-
-    const res = await fetch("/api/learning/prepare", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
-      },
-      body: JSON.stringify({
-        text: baseSpanish,
-        sessionId,
-        messageId: message.id,
-      }),
-    });
-
-    const data = await res.json().catch(() => null);
-
-    // ok 플래그 / HTTP 상태 둘 다 확인
-    if (!res.ok || !data || data.ok === false) {
-      console.error("learning/prepare error:", data);
-      alert("학습 문장을 준비하는 중 오류가 발생했어요.");
+  // ✅ 학습 모드 시작 (메시지 단위 캐시)
+  const handleStartStudy = async (message: ChatMessage) => {
+    if (isGuest) {
+      alert("학습 기능은 로그인 후 사용할 수 있어요 🙂");
       return;
     }
 
-    setStudyState({
-      cardId: data.cardId,   // ✅ 이제 실제 cardId가 들어올 것
-      korean: data.korean,
-      hint: data.hint,
-    });
-    setIsStudyModalOpen(true);
-  } catch (e) {
-    console.error("handleStartStudy error:", e);
-    alert("학습 준비 중 오류가 발생했어요.");
-  } finally {
-    setIsStudyLoading(false);
-  }
-};
+    const messageId = message.id;
 
+    // 0️⃣ 이미 이 메시지에 대한 학습 카드가 있다면 → API 호출 없이 모달만 열기
+    const existing = studyState[messageId];
+    if (existing) {
+      setActiveStudyMessageId(messageId);
+      setIsStudyModalOpen(true);
+      return;
+    }
 
+    // 1️⃣ 기준 스페인어 문장 선택
+    let baseSpanish = "";
+
+    if (message.role === "user" && message.details?.correction) {
+      baseSpanish = message.details.correction;
+    } else {
+      baseSpanish = message.content;
+    }
+
+    if (!baseSpanish || !baseSpanish.trim()) {
+      alert("학습에 사용할 스페인어 문장이 없어요.");
+      return;
+    }
+
+    try {
+      setIsStudyLoading(true);
+
+      const accessToken = await getAccessToken();
+
+      const res = await fetch("/api/learning/prepare", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+        },
+        body: JSON.stringify({
+          text: baseSpanish,
+          sessionId,
+          messageId,
+        }),
+      });
+
+      const data = await res.json().catch(() => null);
+
+      if (!res.ok || !data || data.ok === false) {
+        console.error("learning/prepare error:", data);
+        alert("학습 문장을 준비하는 중 오류가 발생했어요.");
+        return;
+      }
+
+      // ✅ 메시지별 학습 카드 캐시
+      setStudyState((prev) => ({
+        ...prev,
+        [messageId]: {
+          cardId: data.cardId ?? null,
+          korean: data.korean,
+          hint: data.hint,
+        },
+      }));
+
+      setActiveStudyMessageId(messageId);
+      setIsStudyModalOpen(true);
+    } catch (e) {
+      console.error("handleStartStudy error:", e);
+      alert("학습 준비 중 오류가 발생했어요.");
+    } finally {
+      setIsStudyLoading(false);
+    }
+  };
 
   // ✅ 버튼을 눌렀을 때 Juan이 먼저 인사
   const handleStartConversation = async () => {
-
     if (isStarting) return;
 
     setIsStarting(true);
 
     try {
-      // 1️⃣ GPT에게 인사 멘트 요청
       const res = await fetch("/api/chat", {
         method: "POST",
         body: JSON.stringify({
@@ -682,7 +686,6 @@ const handleStartStudy = async (message: ChatMessage) => {
       const formattedGreeting = formatAssistantText(fullGreeting);
 
       if (isGuest) {
-        // 🔹 게스트 모드: DB에 세션 만들지 않고 화면에만 인사 보여줌
         setMessages([
           {
             id: makeId(),
@@ -693,8 +696,7 @@ const handleStartStudy = async (message: ChatMessage) => {
         startTypewriter(formattedGreeting);
         setHasStarted(true);
       } else {
-        // 🔹 로그인 모드: 인사를 세션으로 저장
-        const accessToken = await getAccessToken(); // 🔐 추가
+        const accessToken = await getAccessToken();
 
         const createRes = await fetch("/api/session/create-greeting", {
           method: "POST",
@@ -738,7 +740,6 @@ const handleStartStudy = async (message: ChatMessage) => {
           content: "처음 인사 불러오는데 문제가 생겼어 🥲",
         },
       ]);
-      // 그래도 대화는 시작 가능하게
       setHasStarted(true);
     } finally {
       setIsStarting(false);
@@ -747,10 +748,9 @@ const handleStartStudy = async (message: ChatMessage) => {
 
   // 메시지 보내기
   const handleSend = async () => {
-    if (!hasStarted) return; // 아직 인사 전이면 막기
+    if (!hasStarted) return;
     if (!input.trim() || isSending) return;
 
-    // 🔐 게스트 모드 + 최대 2회 체험 → 로그인 유도 모달
     if (isGuest && guestTrialCount >= 1) {
       setShowLoginModal(true);
       return;
@@ -769,15 +769,12 @@ const handleStartStudy = async (message: ChatMessage) => {
     setInput("");
     setIsSending(true);
 
-    // 이 함수 안에서 사용할 현재 세션 ID (새로 생성될 수도 있음)
     let currentSessionId = sessionId;
 
     try {
-      const accessToken = !isGuest ? await getAccessToken() : null; // 🔐 추가
+      const accessToken = !isGuest ? await getAccessToken() : null;
 
-      // 🔹 로그인 모드일 때만 세션 생성/메시지 저장
       if (!isGuest) {
-        // 1️⃣ 세션이 없으면 = 첫 메시지 → 세션 생성 + 첫 메시지 DB 저장
         if (!currentSessionId) {
           const createRes = await fetch("/api/session/create", {
             method: "POST",
@@ -803,37 +800,33 @@ const handleStartStudy = async (message: ChatMessage) => {
 
           currentSessionId = createData.sessionId as string;
           setSessionId(currentSessionId);
-          // ⚠️ session/create가 이미 첫 user 메시지는 DB에 저장
         } else {
-          // 2️⃣ 이미 세션이 있는 경우 = 그냥 user 메시지를 DB에 추가
           try {
             const saveUserRes = await fetch("/api/message/add", {
-  method: "POST",
-  headers: {
-    "Content-Type": "application/json",
-    ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
-  },
-  body: JSON.stringify({
-    sessionId: currentSessionId,
-    role: "user",
-    content: trimmed,
-  }),
-});
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                ...(accessToken
+                  ? { Authorization: `Bearer ${accessToken}` }
+                  : {}),
+              },
+              body: JSON.stringify({
+                sessionId: currentSessionId,
+                role: "user",
+                content: trimmed,
+              }),
+            });
 
-const saveUserData = await saveUserRes.json();
-
-// 🔐 ok 플래그 기준으로만 에러 판단
-if (!saveUserRes.ok || saveUserData.ok === false) {
-  console.error("message/add (user) error:", saveUserData.error);
-}
-
+            const saveUserData = await saveUserRes.json();
+            if (!saveUserRes.ok || saveUserData.ok === false) {
+              console.error("message/add (user) error:", saveUserData.error);
+            }
           } catch (saveErr) {
             console.error("message/add (user) fetch error:", saveErr);
           }
         }
       }
 
-      // 3️⃣ GPT에게 응답 요청 (이건 로그인/게스트 공통)
       const chatRes = await fetch("/api/chat", {
         method: "POST",
         body: JSON.stringify({
@@ -859,36 +852,35 @@ if (!saveUserRes.ok || saveUserData.ok === false) {
       const formatted = formatAssistantText(fullAssistantText);
       startTypewriter(formatted);
 
-      // 4️⃣ GPT 응답도 DB에 저장 (로그인 모드에서만)
       if (!isGuest && currentSessionId) {
         try {
           const saveAssistantRes = await fetch("/api/message/add", {
-  method: "POST",
-  headers: {
-    "Content-Type": "application/json",
-    ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
-  },
-  body: JSON.stringify({
-    sessionId: currentSessionId,
-    role: "assistant",
-    content: formatted,
-  }),
-});
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              ...(accessToken
+                ? { Authorization: `Bearer ${accessToken}` }
+                : {}),
+            },
+            body: JSON.stringify({
+              sessionId: currentSessionId,
+              role: "assistant",
+              content: formatted,
+            }),
+          });
 
-const saveAssistantData = await saveAssistantRes.json();
-if (!saveAssistantRes.ok || saveAssistantData.ok === false) {
-  console.error(
-    "message/add (assistant) error:",
-    saveAssistantData.error
-  );
-}
-
+          const saveAssistantData = await saveAssistantRes.json();
+          if (!saveAssistantRes.ok || saveAssistantData.ok === false) {
+            console.error(
+              "message/add (assistant) error:",
+              saveAssistantData.error
+            );
+          }
         } catch (saveErr) {
           console.error("message/add (assistant) fetch error:", saveErr);
         }
       }
 
-      // 🔹 게스트 모드일 경우에만 사용 횟수 +1 (메모리에만 저장)
       if (isGuest && chatRes.ok) {
         setGuestTrialCount((prev) => prev + 1);
       }
@@ -908,7 +900,6 @@ if (!saveAssistantRes.ok || saveAssistantData.ok === false) {
     }
   };
 
-  // Enter로 전송 (Shift+Enter는 줄바꿈)
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -916,7 +907,10 @@ if (!saveAssistantRes.ok || saveAssistantData.ok === false) {
     }
   };
 
-    return (
+  const activeStudyCard: StudyCard | null =
+    activeStudyMessageId ? studyState[activeStudyMessageId] ?? null : null;
+
+  return (
     <>
       <div
         style={{
@@ -934,7 +928,7 @@ if (!saveAssistantRes.ok || saveAssistantData.ok === false) {
             marginBottom: "12px",
           }}
         >
-          {/* 🔹 상단 헤더: 제목 중앙, 좌측 메인, 우측 삭제 */}
+          {/* 상단 헤더 */}
           <div
             style={{
               position: "relative",
@@ -945,7 +939,6 @@ if (!saveAssistantRes.ok || saveAssistantData.ok === false) {
               justifyContent: "center",
             }}
           >
-            {/* ← 메인으로 (좌측 고정) */}
             <button
               onClick={goHome}
               style={{
@@ -964,7 +957,6 @@ if (!saveAssistantRes.ok || saveAssistantData.ok === false) {
               ← 메인으로
             </button>
 
-            {/* 중앙 제목 */}
             <h2
               style={{
                 fontSize: "20px",
@@ -975,7 +967,6 @@ if (!saveAssistantRes.ok || saveAssistantData.ok === false) {
               Juan과의 대화
             </h2>
 
-            {/* 현재 대화 삭제 (우측 고정) */}
             <button
               onClick={handleDeleteCurrentSession}
               style={{
@@ -1030,7 +1021,7 @@ if (!saveAssistantRes.ok || saveAssistantData.ok === false) {
                       alignSelf: isUserMsg ? "flex-end" : "flex-start",
                     }}
                   >
-                                        {/* ✅ 내 말풍선: 왼쪽에 + 버튼 + 학습 버튼(이모지) */}
+                    {/* 내 말풍선 */}
                     {isUserMsg && (
                       <>
                         <button
@@ -1051,7 +1042,7 @@ if (!saveAssistantRes.ok || saveAssistantData.ok === false) {
                           {isExpanded ? "−" : "+"}
                         </button>
 
-                                                <button
+                        <button
                           onClick={() => handleStartStudy(msg)}
                           style={{
                             fontSize: "14px",
@@ -1070,7 +1061,6 @@ if (!saveAssistantRes.ok || saveAssistantData.ok === false) {
                       </>
                     )}
 
-
                     {/* 말풍선 */}
                     <div
                       style={{
@@ -1085,7 +1075,7 @@ if (!saveAssistantRes.ok || saveAssistantData.ok === false) {
                       {msg.content}
                     </div>
 
-                                        {/* GPT 말풍선: 오른쪽 + 버튼 + 학습(📘) + 듣기 */}
+                    {/* GPT 말풍선 */}
                     {isAssistant && (
                       <div style={{ display: "flex", gap: "4px" }}>
                         <button
@@ -1108,7 +1098,7 @@ if (!saveAssistantRes.ok || saveAssistantData.ok === false) {
                           {isExpanded ? "−" : "+"}
                         </button>
 
-                                                <button
+                        <button
                           onClick={() => handleStartStudy(msg)}
                           style={{
                             fontSize: "14px",
@@ -1125,8 +1115,6 @@ if (!saveAssistantRes.ok || saveAssistantData.ok === false) {
                           📘
                         </button>
 
-
-                                                {/* 게스트 모드에서는 TTS 버튼 숨김 */}
                         {!isGuest && (
                           <button
                             onClick={() => handlePlayTTS(msg)}
@@ -1152,7 +1140,7 @@ if (!saveAssistantRes.ok || saveAssistantData.ok === false) {
                     )}
                   </div>
 
-                  {/* 아래 펼쳐지는 상세 영역 (user + assistant 공통) */}
+                  {/* 아래 펼쳐지는 상세 영역 */}
                   {isExpanded && (
                     <div
                       style={{
@@ -1193,7 +1181,6 @@ if (!saveAssistantRes.ok || saveAssistantData.ok === false) {
                         </div>
                       ) : (
                         <>
-                          {/* ✅ 내 말풍선일 때만 0. 스페인어 문장 교정 표시 */}
                           {isUserMsg && msg.details?.correction && (
                             <div style={{ marginBottom: "6px" }}>
                               <strong>0. 스페인어 문장 교정</strong>
@@ -1273,7 +1260,6 @@ if (!saveAssistantRes.ok || saveAssistantData.ok === false) {
           }}
         >
           {!hasStarted ? (
-            // ✅ 아직 대화 시작 전: 인사하기 버튼만 보여주기
             <button
               onClick={handleStartConversation}
               disabled={isStarting}
@@ -1331,7 +1317,6 @@ if (!saveAssistantRes.ok || saveAssistantData.ok === false) {
               </button>
             </>
           )}
-          {/* ⚠️ 민감한 대화 주의 문구 */}
           <p
             style={{
               marginTop: "8px",
@@ -1349,7 +1334,7 @@ if (!saveAssistantRes.ok || saveAssistantData.ok === false) {
         </div>
       </div>
 
-      {/* 🧊 게스트 2회 초과 시 로그인 모달 */}
+      {/* 게스트 2회 초과 시 로그인 모달 */}
       {showLoginModal && (
         <div
           style={{
@@ -1436,20 +1421,21 @@ if (!saveAssistantRes.ok || saveAssistantData.ok === false) {
         isOpen={isStudyModalOpen}
         onClose={() => {
           setIsStudyModalOpen(false);
-          setStudyState(null);
         }}
-        state={studyState}
+        card={activeStudyCard}
       />
     </>
   );
 }
+
+
 type StudyModalProps = {
   isOpen: boolean;
   onClose: () => void;
-  state: StudyState;
+  card: StudyCard | null;
 };
 
-function StudyModal({ isOpen, onClose, state }: StudyModalProps) {
+function StudyModal({ isOpen, onClose, card }: StudyModalProps) {
   const [answer, setAnswer] = useState("");
   const [feedback, setFeedback] = useState<{
     correct_answer: string;
@@ -1458,40 +1444,42 @@ function StudyModal({ isOpen, onClose, state }: StudyModalProps) {
   } | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  if (!isOpen || !state) return null;
+  if (!isOpen || !card) return null;
 
   const handleSubmit = async () => {
-  const trimmed = answer.trim();
-  if (!trimmed) return;
+    const trimmed = answer.trim();
+    if (!trimmed) return;
 
-  // ✅ 학습 카드 정보가 없으면 바로 막기 (안전장치)
-  if (!state.cardId) {
-    alert("학습 카드 정보가 없어 피드백을 가져올 수 없어요.\n다시 학습 버튼을 눌러 준비해 주세요.");
-    return;
-  }
+    if (!card.cardId) {
+      alert(
+        "학습 카드 정보가 없어 피드백을 가져올 수 없어요.\n다시 학습 버튼을 눌러 준비해 주세요."
+      );
+      return;
+    }
 
-  try {
-    setIsSubmitting(true);
+    try {
+      setIsSubmitting(true);
 
-    // 🔐 Supabase 세션에서 access token 가져오기
-    const { data } = await supabase.auth.getSession();
-    const accessToken = data.session?.access_token ?? null;
+      const { data } = await supabase.auth.getSession();
+      const accessToken = data.session?.access_token ?? null;
 
-    const res = await fetch("/api/learning/answer", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
-      },
-      body: JSON.stringify({
-        cardId: state.cardId,
-        userAnswer: trimmed,
-      }),
-    });
-
+      const res = await fetch("/api/learning/answer", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+        },
+        body: JSON.stringify({
+          cardId: card.cardId,
+          userAnswer: trimmed,
+        }),
+      });
 
       if (!res.ok) {
-        console.error("learning/answer error:", await res.json().catch(() => ({})));
+        console.error(
+          "learning/answer error:",
+          await res.json().catch(() => ({}))
+        );
         alert("피드백을 불러오는 데 실패했어요.");
         return;
       }
@@ -1508,7 +1496,7 @@ function StudyModal({ isOpen, onClose, state }: StudyModalProps) {
 
   const handleRetry = () => {
     setAnswer("");
-    setFeedback(null); // 🔁 다시: 입력/피드백 초기화
+    setFeedback(null);
   };
 
   return (
@@ -1588,9 +1576,9 @@ function StudyModal({ isOpen, onClose, state }: StudyModalProps) {
               whiteSpace: "pre-wrap",
             }}
           >
-            {state.korean}
+            {card.korean}
           </div>
-          {state.hint && (
+          {card.hint && (
             <p
               style={{
                 marginTop: "6px",
@@ -1598,7 +1586,7 @@ function StudyModal({ isOpen, onClose, state }: StudyModalProps) {
                 color: "#9ca3af",
               }}
             >
-              힌트: {state.hint}
+              힌트: {card.hint}
             </p>
           )}
         </div>
@@ -1713,4 +1701,3 @@ function StudyModal({ isOpen, onClose, state }: StudyModalProps) {
     </div>
   );
 }
-
