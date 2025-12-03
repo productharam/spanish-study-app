@@ -2,22 +2,26 @@
 
 ## 구현된 기능
 1. 메인 화면
-   - 들어가기 버튼
+  - 들어가기 버튼
 
 2. Juan과 대화하기
-   - Juan에게 인사하기 (버튼)
-   - 채팅 (API: /api/chat)
-   - 문장 분석 (API: /api/details, /api/details-user)
-     - GPT API 모델: gpt-5.1-nano
-   - TTS (API: /api/tts, ElevenLabs)
+  - Juan에게 인사하기 (버튼)
+  - 채팅 (API: /api/chat)
+  - 문장 분석 (API: /api/details, /api/details-user)
+    - GPT API 모델: gpt-5.1
+  - TTS (API: /api/tts, ElevenLabs)
+  
+3. SEO로그인
+  - 구글 로그인
+
+4. 학습기능
+  - 한글 -> 스페인어 변환 / 채점
+  - 힌트
+
+
 
 ## 미구현 기능
 - 암호화(내용 자체 암호화)
   - 지금은 안 해도 됨.
   - Supabase 기본 암호화 + RLS로도 충분.
   - 진짜 외부 유저 + 민감데이터 단계에서 고민해도 늦지 않음.
-
-- 계정별 DB 설계(멀티 유저 구조)
-  - 스키마는 지금부터 유저 기준으로 설계하는 걸 강력 추천
-  - user_id, session_id 같은 필드는 지금 넣어두자.
-  - 카카오/구글 로그인 구현은 나중에 해도 OK.
