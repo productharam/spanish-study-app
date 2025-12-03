@@ -1,4 +1,4 @@
-# Spanish Study App (초기 버전) /. 2025-11-23
+# Spanish Study App (초기 버전) /. 2025-12-03
 
 ## 구현된 기능
 1. 메인 화면
