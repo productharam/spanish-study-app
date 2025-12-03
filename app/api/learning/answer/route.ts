@@ -1,3 +1,4 @@
+// app/api/learning/answer/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseServer } from "@/lib/supabaseServerClient";
 import OpenAI from "openai";
@@ -34,7 +35,7 @@ ${userAnswer}
 `;
 
   const res = await client.chat.completions.create({
-    model: "gpt-5.1-nano", // 네가 chat에 쓰는 동일 모델 사용 추천
+    model: "gpt-5.1", // ✅ 통일
     messages: [
       { role: "system", content: systemPrompt },
       { role: "user", content: userPrompt },
@@ -43,11 +44,24 @@ ${userAnswer}
   });
 
   const raw = res.choices[0].message.content ?? "{}";
-  const parsed = JSON.parse(raw);
+
+  let parsed: any = {};
+  try {
+    parsed = JSON.parse(raw);
+  } catch (e) {
+    console.error("JSON parse error in generateFeedback:", raw);
+    // 최소한 형태는 맞추자 (완전 망가지면 is_correct=false로 처리)
+    return {
+      correct_answer: correctSentence,
+      tip: "피드백 생성 중 오류가 발생했어요. 정답 예문만 참고해 주세요.",
+      is_correct: false,
+    };
+  }
+
   return {
     correct_answer: parsed.correct_answer as string,
     tip: parsed.tip as string,
-    is_correct: parsed.is_correct as boolean,
+    is_correct: Boolean(parsed.is_correct),
   };
 }
 
@@ -72,47 +86,51 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const userId = user.id;
+    const userId = user.id as string;
 
-    // 1) learning_cards에서 정답 문장 가져오기
+    // 1️⃣ learning_cards에서 정답 문장 가져오기 (본인 카드만)
     const { data: card, error: cardError } = await supabaseServer
       .from("learning_cards")
-      .select("*")
+      .select("id, user_id, corrected_spanish")
       .eq("id", cardId)
-      .eq("user_id", userId)
-      .single();
+      .maybeSingle();
 
     if (cardError || !card) {
-      console.error(cardError);
+      console.error("learning_cards not found:", cardError);
       return NextResponse.json(
-        { error: "학습 카드가 없습니다." },
+        { error: "학습 카드를 찾을 수 없습니다." },
         { status: 404 }
       );
     }
 
-    // 2) GPT로 피드백
+    if (card.user_id !== userId) {
+      // 혹시 모를 다른 사람 카드 접근 차단
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+
+    // 2️⃣ GPT로 피드백 생성
     const feedback = await generateFeedback(
-      (card as any).corrected_spanish,
-      userAnswer
+      card.corrected_spanish as string,
+      String(userAnswer)
     );
 
-    // 3) DB에 attempt 저장 (7번 중 5번에 해당)
+    // 3️⃣ DB에 attempt 저장 (비동기 에러는 로깅만 하고, 사용자 응답은 계속)
     const { error: attemptError } = await supabaseServer
       .from("learning_attempts")
       .insert({
         learning_card_id: cardId,
         user_answer_spanish: userAnswer,
-        feedback,
+        feedback, // jsonb 컬럼
       });
 
     if (attemptError) {
-      console.error(attemptError);
-      // 그래도 사용자에게는 피드백은 보여주자
+      console.error("learning_attempts insert error:", attemptError);
     }
 
+    // 4️⃣ 모달에 바로 쓸 피드백 반환
     return NextResponse.json(feedback);
   } catch (e) {
-    console.error(e);
+    console.error("learning/answer 서버 오류:", e);
     return NextResponse.json({ error: "서버 오류" }, { status: 500 });
   }
 }

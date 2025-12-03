@@ -38,10 +38,10 @@ export default function ChatWindow() {
 
   const [expandedMessageIds, setExpandedMessageIds] = useState<string[]>([]);
 
-  // 🔊 TTS 관련 상태 & 캐시
+    // 🔊 TTS 관련 상태 & 캐시
   const audioCacheRef = useRef<Map<string, string>>(new Map());
   const [playingMessageId, setPlayingMessageId] = useState<string | null>(null);
-  const currentAudioRef = useRef<HTMLAudioElement | null>(null); // ✅ 현재 재생 중인 오디오
+  const currentAudioRef = useRef<HTMLAudioElement | null>(null); // ✅ 추가
 
 
   const typingSpeed = 20; // ms 단위, 숫자 낮출수록 더 빨리 타이핑됨
@@ -357,7 +357,7 @@ export default function ChatWindow() {
   };
 
   // 🔊 TTS: 메시지 1개에 대해 한 번만 API 호출, 이후 재사용
-  const handlePlayTTS = async (message: ChatMessage) => {
+    const handlePlayTTS = async (message: ChatMessage) => {
     try {
       // 게스트 모드에서는 TTS 사용 안 함
       if (isGuest) return;
@@ -376,14 +376,16 @@ export default function ChatWindow() {
         currentAudioRef.current.pause();
         currentAudioRef.current.currentTime = 0;
         currentAudioRef.current = null;
+        setPlayingMessageId(null);
       }
 
-      // 2️⃣ 캐시에 URL 있으면 그대로 재생
+      // 2️⃣ 캐시에 URL이 있으면 그대로 재생
       if (audioCacheRef.current.has(message.id)) {
         const existingUrl = audioCacheRef.current.get(message.id)!;
         const audio = new Audio(existingUrl);
         currentAudioRef.current = audio;
         setPlayingMessageId(message.id);
+
         audio.play();
         audio.onended = () => {
           setPlayingMessageId(null);
@@ -431,6 +433,7 @@ export default function ChatWindow() {
 
       const audio = new Audio(url);
       currentAudioRef.current = audio;
+
       audio.play();
       audio.onended = () => {
         setPlayingMessageId(null);
@@ -444,9 +447,7 @@ export default function ChatWindow() {
       console.error(err);
       alert("음성 재생 중 오류가 발생했어 😢");
       setPlayingMessageId(null);
-      if (currentAudioRef.current) {
-        currentAudioRef.current = null;
-      }
+      currentAudioRef.current = null;
     }
   };
 
@@ -587,53 +588,72 @@ export default function ChatWindow() {
   };
 
   // ✅ 학습 모드 시작 (학습 모달 띄우기)
-  const handleStartStudy = async (messageId: string) => {
-    // 게스트 모드에서는 학습 기능 제한
-    if (isGuest) {
-      alert("학습 기능은 로그인 후 사용할 수 있어요 🙂");
+    // ✅ 학습 모드 시작 (학습 모달 띄우기) — 메시지 전체를 받도록 변경
+  // ✅ 학습 모드 시작 (학습 모달 띄우기)
+const handleStartStudy = async (message: ChatMessage) => {
+  // 게스트 모드에서는 학습 기능 제한
+  if (isGuest) {
+    alert("학습 기능은 로그인 후 사용할 수 있어요 🙂");
+    return;
+  }
+
+  // 1️⃣ 기준 스페인어 문장 선택
+  let baseSpanish = "";
+
+  if (message.role === "user" && message.details?.correction) {
+    baseSpanish = message.details.correction;
+  } else {
+    baseSpanish = message.content;
+  }
+
+  if (!baseSpanish || !baseSpanish.trim()) {
+    alert("학습에 사용할 스페인어 문장이 없어요.");
+    return;
+  }
+
+  try {
+    setIsStudyLoading(true);
+
+    // 🔐 access token 가져오기 (다른 API들처럼)
+    const accessToken = await getAccessToken();
+
+    const res = await fetch("/api/learning/prepare", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+      },
+      body: JSON.stringify({
+        text: baseSpanish,
+        sessionId,
+        messageId: message.id,
+      }),
+    });
+
+    const data = await res.json().catch(() => null);
+
+    // ok 플래그 / HTTP 상태 둘 다 확인
+    if (!res.ok || !data || data.ok === false) {
+      console.error("learning/prepare error:", data);
+      alert("학습 문장을 준비하는 중 오류가 발생했어요.");
       return;
     }
 
-    if (!sessionId) {
-      alert("세션 정보가 없어 학습을 시작할 수 없어요.");
-      return;
-    }
+    setStudyState({
+      cardId: data.cardId,   // ✅ 이제 실제 cardId가 들어올 것
+      korean: data.korean,
+      hint: data.hint,
+    });
+    setIsStudyModalOpen(true);
+  } catch (e) {
+    console.error("handleStartStudy error:", e);
+    alert("학습 준비 중 오류가 발생했어요.");
+  } finally {
+    setIsStudyLoading(false);
+  }
+};
 
-    try {
-      setIsStudyLoading(true);
 
-      const accessToken = await getAccessToken();
-
-      const res = await fetch("/api/learning/prepare", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
-        },
-        body: JSON.stringify({ sessionId, messageId }),
-      });
-
-      if (!res.ok) {
-        console.error("learning/prepare error:", await res.json().catch(() => ({})));
-        alert("학습 문장을 준비하는 중 오류가 발생했어요.");
-        return;
-      }
-
-      const data = await res.json();
-
-      setStudyState({
-        cardId: data.cardId,
-        korean: data.korean,
-        hint: data.hint,
-      });
-      setIsStudyModalOpen(true);
-    } catch (e) {
-      console.error("handleStartStudy error:", e);
-      alert("학습 준비 중 오류가 발생했어요.");
-    } finally {
-      setIsStudyLoading(false);
-    }
-  };
 
   // ✅ 버튼을 눌렀을 때 Juan이 먼저 인사
   const handleStartConversation = async () => {
@@ -1010,7 +1030,7 @@ if (!saveAssistantRes.ok || saveAssistantData.ok === false) {
                       alignSelf: isUserMsg ? "flex-end" : "flex-start",
                     }}
                   >
-                    {/* ✅ 내 말풍선: 왼쪽에 + 버튼 + 학습 버튼 */}
+                                        {/* ✅ 내 말풍선: 왼쪽에 + 버튼 + 학습 버튼(이모지) */}
                     {isUserMsg && (
                       <>
                         <button
@@ -1031,23 +1051,25 @@ if (!saveAssistantRes.ok || saveAssistantData.ok === false) {
                           {isExpanded ? "−" : "+"}
                         </button>
 
-                        <button
-                          onClick={() => handleStartStudy(msg.id)}
+                                                <button
+                          onClick={() => handleStartStudy(msg)}
                           style={{
-                            fontSize: "12px",
+                            fontSize: "14px",
                             padding: "4px 8px",
                             borderRadius: "999px",
-                            border: "1px solid #16a34a",
+                            border: "1px solid #555",
                             backgroundColor: "#111",
-                            color: "#bbf7d0",
+                            color: "white",
                             cursor: isStudyLoading ? "not-allowed" : "pointer",
                           }}
                           disabled={isStudyLoading}
+                          aria-label="학습 모드 열기"
                         >
-                          학습
+                          📘
                         </button>
                       </>
                     )}
+
 
                     {/* 말풍선 */}
                     <div
@@ -1063,7 +1085,7 @@ if (!saveAssistantRes.ok || saveAssistantData.ok === false) {
                       {msg.content}
                     </div>
 
-                    {/* GPT 말풍선: 오른쪽 + 버튼 + 학습 + 스피커 */}
+                                        {/* GPT 말풍선: 오른쪽 + 버튼 + 학습(📘) + 듣기 */}
                     {isAssistant && (
                       <div style={{ display: "flex", gap: "4px" }}>
                         <button
@@ -1086,21 +1108,23 @@ if (!saveAssistantRes.ok || saveAssistantData.ok === false) {
                           {isExpanded ? "−" : "+"}
                         </button>
 
-                        <button
-                          onClick={() => handleStartStudy(msg.id)}
+                                                <button
+                          onClick={() => handleStartStudy(msg)}
                           style={{
-                            fontSize: "12px",
+                            fontSize: "14px",
                             padding: "4px 8px",
                             borderRadius: "999px",
-                            border: "1px solid #16a34a",
+                            border: "1px solid #555",
                             backgroundColor: "#111",
-                            color: "#bbf7d0",
+                            color: "white",
                             cursor: isStudyLoading ? "not-allowed" : "pointer",
                           }}
                           disabled={isStudyLoading}
+                          aria-label="학습 모드 열기"
                         >
-                          학습
+                          📘
                         </button>
+
 
                                                 {/* 게스트 모드에서는 TTS 버튼 숨김 */}
                         {!isGuest && (
@@ -1117,11 +1141,11 @@ if (!saveAssistantRes.ok || saveAssistantData.ok === false) {
                             }}
                             aria-label={
                               playingMessageId === msg.id
-                                ? "스페인어 문장 재생 중, 정지하기"
+                                ? "스페인어 문장 정지"
                                 : "스페인어 문장 듣기"
                             }
                           >
-                            {playingMessageId === msg.id ? "⏹" : "🔈"}
+                            {playingMessageId === msg.id ? "⏸️" : "▶️"}
                           </button>
                         )}
                       </div>
@@ -1437,27 +1461,34 @@ function StudyModal({ isOpen, onClose, state }: StudyModalProps) {
   if (!isOpen || !state) return null;
 
   const handleSubmit = async () => {
-    const trimmed = answer.trim();
-    if (!trimmed) return;
+  const trimmed = answer.trim();
+  if (!trimmed) return;
 
-    try {
-      setIsSubmitting(true);
+  // ✅ 학습 카드 정보가 없으면 바로 막기 (안전장치)
+  if (!state.cardId) {
+    alert("학습 카드 정보가 없어 피드백을 가져올 수 없어요.\n다시 학습 버튼을 눌러 준비해 주세요.");
+    return;
+  }
 
-      // 🔐 Supabase 세션에서 access token 가져오기
-      const { data } = await supabase.auth.getSession();
-      const accessToken = data.session?.access_token ?? null;
+  try {
+    setIsSubmitting(true);
 
-      const res = await fetch("/api/learning/answer", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
-        },
-        body: JSON.stringify({
-          cardId: state.cardId,
-          userAnswer: trimmed,
-        }),
-      });
+    // 🔐 Supabase 세션에서 access token 가져오기
+    const { data } = await supabase.auth.getSession();
+    const accessToken = data.session?.access_token ?? null;
+
+    const res = await fetch("/api/learning/answer", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+      },
+      body: JSON.stringify({
+        cardId: state.cardId,
+        userAnswer: trimmed,
+      }),
+    });
+
 
       if (!res.ok) {
         console.error("learning/answer error:", await res.json().catch(() => ({})));
