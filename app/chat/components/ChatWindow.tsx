@@ -68,7 +68,8 @@ export default function ChatWindow() {
   // ✅ 학습 상태: 메시지별 학습 카드 캐시
   const [studyState, setStudyState] = useState<StudyState>({});
   const [isStudyModalOpen, setIsStudyModalOpen] = useState(false);
-  const [activeStudyMessageId, setActiveStudyMessageId] = useState<string | null>(null);
+  const [activeStudyMessageId, setActiveStudyMessageId] =
+    useState<string | null>(null);
   const [isStudyLoading, setIsStudyLoading] = useState(false);
 
   // 🔐 브라우저 Supabase 세션에서 access token 가져오기
@@ -1137,7 +1138,7 @@ export default function ChatWindow() {
                                 : "스페인어 문장 듣기"
                             }
                           >
-                            {playingMessageId === msg.id ? "⏸️" : "▶️"}
+                            {playingMessageId === msg.id ? "⏹️" : "▶️"}
                           </button>
                         )}
                       </div>
@@ -1464,6 +1465,7 @@ function StudyModal({
   const [isTtsLoading, setIsTtsLoading] = useState(false);
   const [ttsAudioUrl, setTtsAudioUrl] = useState<string | null>(null);
   const ttsAudioRef = useRef<HTMLAudioElement | null>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
 
   if (!isOpen || !card) return null;
 
@@ -1543,6 +1545,7 @@ function StudyModal({
         ttsAudioRef.current.pause();
         ttsAudioRef.current.currentTime = 0;
         ttsAudioRef.current = null;
+        setIsPlaying(false);
         return;
       }
 
@@ -1552,12 +1555,16 @@ function StudyModal({
       if (ttsAudioUrl) {
         const audio = new Audio(ttsAudioUrl);
         ttsAudioRef.current = audio;
+        setIsPlaying(true);
+
         audio.play();
         audio.onended = () => {
           ttsAudioRef.current = null;
+          setIsPlaying(false);
         };
         audio.onerror = () => {
           ttsAudioRef.current = null;
+          setIsPlaying(false);
         };
         return;
       }
@@ -1584,12 +1591,16 @@ function StudyModal({
 
       const audio = new Audio(data.url);
       ttsAudioRef.current = audio;
+      setIsPlaying(true);
+
       audio.play();
       audio.onended = () => {
         ttsAudioRef.current = null;
+        setIsPlaying(false);
       };
       audio.onerror = () => {
         ttsAudioRef.current = null;
+        setIsPlaying(false);
       };
     } catch (e) {
       console.error("StudyModal handlePlayTTS error:", e);
@@ -1706,15 +1717,16 @@ function StudyModal({
                 borderRadius: "999px",
                 border: "1px solid #4b5563",
                 padding: "6px 12px",
-                fontSize: "13px",
+                fontSize: "16px",
                 backgroundColor: "#1f2937",
                 color: "#e5e7eb",
                 cursor: isTtsLoading ? "not-allowed" : "pointer",
                 opacity: isTtsLoading ? 0.7 : 1,
               }}
               disabled={isTtsLoading}
+              aria-label="스페인어 문장 듣기"
             >
-              {isTtsLoading ? "음성 준비 중..." : "스페인어 문장 듣기 ▶️"}
+              {isTtsLoading ? "…" : isPlaying ? "⏹️" : "▶️"}
             </button>
           </div>
         )}
