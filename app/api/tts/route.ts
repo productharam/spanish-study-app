@@ -3,11 +3,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabaseServer } from "@/lib/supabaseServerClient";
 
 const ELEVEN_API_KEY = process.env.ELEVENLABS_API_KEY!;
-const ELEVEN_VOICE_ID = process.env.ELEVENLABS_VOICE_ID ?? "EXAVITQu4vr4xnSDxMaL";
+const ELEVEN_VOICE_ID =
+  process.env.ELEVENLABS_VOICE_ID ?? "EXAVITQu4vr4xnSDxMaL";
 
 export async function POST(req: NextRequest) {
   try {
-    const { text, sessionId } = await req.json();
+    const { text, sessionId, messageId } = await req.json();
 
     if (!text || typeof text !== "string") {
       return NextResponse.json(
@@ -30,7 +31,34 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 1️⃣ ElevenLabs에 TTS 요청
+    // ✅ 0. 파일 경로 결정
+    const baseFileName =
+      messageId && typeof messageId === "string"
+        ? `${messageId}.mp3`
+        : `${Date.now()}-${Math.random().toString(16).slice(2)}.mp3`;
+
+    const filePath = `${sessionId}/${baseFileName}`;
+
+    // ✅ 1. messageId가 있으면 Supabase Storage에서 기존 파일 있는지 먼저 확인
+    if (messageId && typeof messageId === "string") {
+      const { data: fileList, error: listError } =
+        await supabaseServer.storage.from("tts-audio").list(sessionId, {
+          limit: 1000,
+        });
+
+      if (!listError && fileList?.some((f) => f.name === baseFileName)) {
+        const {
+          data: { publicUrl },
+        } = supabaseServer.storage.from("tts-audio").getPublicUrl(filePath);
+
+        if (publicUrl) {
+          // 이미 저장된 파일 재사용
+          return NextResponse.json({ url: publicUrl });
+        }
+      }
+    }
+
+    // 2️⃣ ElevenLabs에 TTS 요청
     const elevenRes = await fetch(
       `https://api.elevenlabs.io/v1/text-to-speech/${ELEVEN_VOICE_ID}`,
       {
@@ -42,7 +70,6 @@ export async function POST(req: NextRequest) {
         body: JSON.stringify({
           text,
           model_id: "eleven_turbo_v2_5",
-          // 필요하면 여기 voice_settings 넣으면 됨
           output_format: "mp3_22050",
         }),
       }
@@ -59,17 +86,11 @@ export async function POST(req: NextRequest) {
 
     const audioBuffer = Buffer.from(await elevenRes.arrayBuffer());
 
-    // 2️⃣ Supabase Storage에 업로드 (캐싱은 나중에 다시)
-    const fileName = `${Date.now()}-${Math.random()
-      .toString(16)
-      .slice(2)}.mp3`;
-    const filePath = `${sessionId}/${fileName}`;
-
-    const { data: uploadData, error: uploadError } = await supabaseServer.storage
-      .from("tts-audio")
-      .upload(filePath, audioBuffer, {
+    // 3️⃣ Supabase Storage에 업로드 (파일명은 위에서 결정한 filePath 사용)
+    const { data: uploadData, error: uploadError } =
+      await supabaseServer.storage.from("tts-audio").upload(filePath, audioBuffer, {
         contentType: "audio/mpeg",
-        upsert: false,
+        upsert: true, // ✅ 같은 messageId면 덮어쓰기 허용
       });
 
     if (uploadError) {
@@ -80,7 +101,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 3️⃣ public URL 생성 (버킷이 public이라는 가정)
+    // 4️⃣ public URL 생성
     const {
       data: { publicUrl },
     } = supabaseServer.storage.from("tts-audio").getPublicUrl(filePath);

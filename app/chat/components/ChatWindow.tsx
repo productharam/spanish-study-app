@@ -26,6 +26,8 @@ type StudyCard = {
   cardId: string | null;
   korean: string;
   hint?: string;
+  // 학습에 사용한 기준 스페인어 문장 (TTS에 사용)
+  baseSpanish: string;
 };
 
 // ✅ messageId -> StudyCard 매핑
@@ -415,6 +417,7 @@ export default function ChatWindow() {
         body: JSON.stringify({
           text: message.content,
           sessionId,
+          messageId: message.id, // ✅ Storage 캐시용 key
         }),
       });
 
@@ -648,6 +651,7 @@ export default function ChatWindow() {
           cardId: data.cardId ?? null,
           korean: data.korean,
           hint: data.hint,
+          baseSpanish, // ✅ TTS용 기준 스페인어 저장
         },
       }));
 
@@ -1423,19 +1427,31 @@ export default function ChatWindow() {
           setIsStudyModalOpen(false);
         }}
         card={activeStudyCard}
+        sessionId={sessionId}
+        messageId={activeStudyMessageId}
+        canUseTTS={!isGuest}
       />
     </>
   );
 }
 
-
 type StudyModalProps = {
   isOpen: boolean;
   onClose: () => void;
   card: StudyCard | null;
+  sessionId: string | null;
+  messageId: string | null;
+  canUseTTS: boolean;
 };
 
-function StudyModal({ isOpen, onClose, card }: StudyModalProps) {
+function StudyModal({
+  isOpen,
+  onClose,
+  card,
+  sessionId,
+  messageId,
+  canUseTTS,
+}: StudyModalProps) {
   const [answer, setAnswer] = useState("");
   const [feedback, setFeedback] = useState<{
     correct_answer: string;
@@ -1443,6 +1459,11 @@ function StudyModal({ isOpen, onClose, card }: StudyModalProps) {
     is_correct: boolean;
   } | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // 🔊 학습 모달 TTS 상태
+  const [isTtsLoading, setIsTtsLoading] = useState(false);
+  const [ttsAudioUrl, setTtsAudioUrl] = useState<string | null>(null);
+  const ttsAudioRef = useRef<HTMLAudioElement | null>(null);
 
   if (!isOpen || !card) return null;
 
@@ -1497,6 +1518,85 @@ function StudyModal({ isOpen, onClose, card }: StudyModalProps) {
   const handleRetry = () => {
     setAnswer("");
     setFeedback(null);
+  };
+
+  // 🔊 학습 모달 안 TTS 재생
+  const handlePlayTTS = async () => {
+    if (!canUseTTS) {
+      alert("TTS는 로그인 후 사용할 수 있어요 🙂");
+      return;
+    }
+
+    if (!sessionId) {
+      alert("세션 정보가 없어 음성을 재생할 수 없어요 🥲");
+      return;
+    }
+
+    if (!card.baseSpanish || !card.baseSpanish.trim()) {
+      alert("재생할 스페인어 문장이 없어요.");
+      return;
+    }
+
+    try {
+      // 이미 재생 중이면 정지 (토글)
+      if (ttsAudioRef.current) {
+        ttsAudioRef.current.pause();
+        ttsAudioRef.current.currentTime = 0;
+        ttsAudioRef.current = null;
+        return;
+      }
+
+      setIsTtsLoading(true);
+
+      // 이미 받아둔 URL이 있으면 그대로 재생
+      if (ttsAudioUrl) {
+        const audio = new Audio(ttsAudioUrl);
+        ttsAudioRef.current = audio;
+        audio.play();
+        audio.onended = () => {
+          ttsAudioRef.current = null;
+        };
+        audio.onerror = () => {
+          ttsAudioRef.current = null;
+        };
+        return;
+      }
+
+      const res = await fetch("/api/tts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          text: card.baseSpanish,
+          sessionId,
+          messageId, // ✅ /chat에서 TTS 한 파일과 동일한 key
+        }),
+      });
+
+      const data = await res.json().catch(() => null);
+
+      if (!res.ok || !data?.url) {
+        console.error("StudyModal TTS error:", data);
+        alert("음성을 불러오는 데 실패했어요.");
+        return;
+      }
+
+      setTtsAudioUrl(data.url);
+
+      const audio = new Audio(data.url);
+      ttsAudioRef.current = audio;
+      audio.play();
+      audio.onended = () => {
+        ttsAudioRef.current = null;
+      };
+      audio.onerror = () => {
+        ttsAudioRef.current = null;
+      };
+    } catch (e) {
+      console.error("StudyModal handlePlayTTS error:", e);
+      alert("음성 재생 중 오류가 발생했어요.");
+    } finally {
+      setIsTtsLoading(false);
+    }
   };
 
   return (
@@ -1590,6 +1690,34 @@ function StudyModal({ isOpen, onClose, card }: StudyModalProps) {
             </p>
           )}
         </div>
+
+        {/* 🔊 스페인어 TTS 버튼 */}
+        {canUseTTS && (
+          <div
+            style={{
+              marginBottom: "12px",
+              display: "flex",
+              justifyContent: "flex-end",
+            }}
+          >
+            <button
+              onClick={handlePlayTTS}
+              style={{
+                borderRadius: "999px",
+                border: "1px solid #4b5563",
+                padding: "6px 12px",
+                fontSize: "13px",
+                backgroundColor: "#1f2937",
+                color: "#e5e7eb",
+                cursor: isTtsLoading ? "not-allowed" : "pointer",
+                opacity: isTtsLoading ? 0.7 : 1,
+              }}
+              disabled={isTtsLoading}
+            >
+              {isTtsLoading ? "음성 준비 중..." : "스페인어 문장 듣기 ▶️"}
+            </button>
+          </div>
+        )}
 
         {/* 내가 적는 스페인어 문장 */}
         <div style={{ marginBottom: "12px" }}>
