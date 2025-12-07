@@ -8,7 +8,7 @@ const ELEVEN_VOICE_ID =
 
 export async function POST(req: NextRequest) {
   try {
-    const { text, sessionId, messageId } = await req.json();
+    const { text, audioId } = await req.json();
 
     if (!text || typeof text !== "string") {
       return NextResponse.json(
@@ -17,9 +17,9 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    if (!sessionId || typeof sessionId !== "string") {
+    if (!audioId || typeof audioId !== "string") {
       return NextResponse.json(
-        { error: "sessionId is required" },
+        { error: "audioId is required" },
         { status: 400 }
       );
     }
@@ -31,34 +31,31 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // ✅ 0. 파일 경로 결정
-    const baseFileName =
-      messageId && typeof messageId === "string"
-        ? `${messageId}.mp3`
-        : `${Date.now()}-${Math.random().toString(16).slice(2)}.mp3`;
+    const bucket = "tts-audio";
+    const filePath = `${audioId}.mp3`; // ✅ 말풍선 공통 키로 고정
 
-    const filePath = `${sessionId}/${baseFileName}`;
+    // 1️⃣ 먼저 같은 파일이 이미 있는지 확인 (캐시 체크)
+    let fromCache = false;
+    try {
+      const { data: existingFile, error: downloadError } =
+        await supabaseServer.storage.from(bucket).download(filePath);
 
-    // ✅ 1. messageId가 있으면 Supabase Storage에서 기존 파일 있는지 먼저 확인
-    if (messageId && typeof messageId === "string") {
-      const { data: fileList, error: listError } =
-        await supabaseServer.storage.from("tts-audio").list(sessionId, {
-          limit: 1000,
-        });
-
-      if (!listError && fileList?.some((f) => f.name === baseFileName)) {
+      if (!downloadError && existingFile) {
+        // ✅ 이미 존재 → 바로 public URL 리턴
         const {
           data: { publicUrl },
-        } = supabaseServer.storage.from("tts-audio").getPublicUrl(filePath);
+        } = supabaseServer.storage.from(bucket).getPublicUrl(filePath);
 
         if (publicUrl) {
-          // 이미 저장된 파일 재사용
-          return NextResponse.json({ url: publicUrl });
+          return NextResponse.json({ url: publicUrl, fromCache: true });
         }
       }
+    } catch (checkErr) {
+      // 여기서 에러가 나더라도 그냥 새로 생성하는 쪽으로 진행
+      console.warn("TTS cache check error:", checkErr);
     }
 
-    // 2️⃣ ElevenLabs에 TTS 요청
+    // 2️⃣ 캐시에 없으면 ElevenLabs에 TTS 요청
     const elevenRes = await fetch(
       `https://api.elevenlabs.io/v1/text-to-speech/${ELEVEN_VOICE_ID}`,
       {
@@ -86,11 +83,12 @@ export async function POST(req: NextRequest) {
 
     const audioBuffer = Buffer.from(await elevenRes.arrayBuffer());
 
-    // 3️⃣ Supabase Storage에 업로드 (파일명은 위에서 결정한 filePath 사용)
-    const { data: uploadData, error: uploadError } =
-      await supabaseServer.storage.from("tts-audio").upload(filePath, audioBuffer, {
+    // 3️⃣ Supabase Storage에 업로드
+    const { error: uploadError } = await supabaseServer.storage
+      .from(bucket)
+      .upload(filePath, audioBuffer, {
         contentType: "audio/mpeg",
-        upsert: true, // ✅ 같은 messageId면 덮어쓰기 허용
+        upsert: false, // 이미 있으면 덮어쓰지 않음
       });
 
     if (uploadError) {
@@ -104,7 +102,7 @@ export async function POST(req: NextRequest) {
     // 4️⃣ public URL 생성
     const {
       data: { publicUrl },
-    } = supabaseServer.storage.from("tts-audio").getPublicUrl(filePath);
+    } = supabaseServer.storage.from(bucket).getPublicUrl(filePath);
 
     if (!publicUrl) {
       return NextResponse.json(
@@ -113,8 +111,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 프론트에서는 data.url 사용
-    return NextResponse.json({ url: publicUrl });
+    return NextResponse.json({ url: publicUrl, fromCache });
   } catch (e: any) {
     console.error("TTS route error:", e);
     return NextResponse.json(

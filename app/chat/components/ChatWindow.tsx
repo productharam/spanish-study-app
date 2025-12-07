@@ -362,7 +362,7 @@ export default function ChatWindow() {
     });
   };
 
-  // 🔊 TTS: 메시지 1개에 대해 한 번만 API 호출, 이후 재사용
+    // 🔊 TTS: 메시지 1개에 대해 한 번만 API 호출, 이후 재사용
   const handlePlayTTS = async (message: ChatMessage) => {
     try {
       // 게스트 모드에서는 TTS 사용 안 함
@@ -410,6 +410,9 @@ export default function ChatWindow() {
         return;
       }
 
+      // ✅ 공통 오디오 키: "세션ID-메시지ID"
+      const audioId = `${sessionId}-${message.id}`;
+
       setPlayingMessageId(message.id);
 
       const res = await fetch("/api/tts", {
@@ -417,8 +420,7 @@ export default function ChatWindow() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           text: message.content,
-          sessionId,
-          messageId: message.id, // ✅ Storage 캐시용 key
+          audioId, // ✅ 이제 sessionId 대신 audioId 전달
         }),
       });
 
@@ -435,7 +437,7 @@ export default function ChatWindow() {
         throw new Error("TTS URL이 응답에 없어요");
       }
 
-      // 4️⃣ 캐시에 저장 후 재생
+      // 4️⃣ 캐시에 저장 후 재생 (프론트 캐시: message.id 기준)
       audioCacheRef.current.set(message.id, url);
 
       const audio = new Audio(url);
@@ -457,6 +459,7 @@ export default function ChatWindow() {
       currentAudioRef.current = null;
     }
   };
+
 
   // 🔐 Google 로그인 (로그인 모달에서 사용)
   const loginWithGoogle = async () => {
