@@ -432,7 +432,7 @@ export default function ChatWindow() {
       }
 
       // ✅ 공통 오디오 키: "세션ID/메시지ID"  → Supabase에서 세션별 폴더처럼 보임
-const audioId = `${sessionId}/${message.id}`;
+      const audioId = `${sessionId}/${message.id}`;
 
       setPlayingMessageId(message.id);
 
@@ -1504,6 +1504,25 @@ function StudyModal({
   const ttsAudioRef = useRef<HTMLAudioElement | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
 
+  // 🔥 모달이 닫힐 때마다 입력/피드백/TTS 상태 모두 초기화
+  useEffect(() => {
+    if (!isOpen) {
+      // 입력/피드백 리셋
+      setAnswer("");
+      setFeedback(null);
+
+      // TTS 상태 리셋
+      if (ttsAudioRef.current) {
+        ttsAudioRef.current.pause();
+        ttsAudioRef.current.currentTime = 0;
+        ttsAudioRef.current = null;
+      }
+      setIsPlaying(false);
+      setTtsAudioUrl(null);
+      setIsTtsLoading(false);
+    }
+  }, [isOpen]);
+
   if (!isOpen || !card) return null;
 
   const handleSubmit = async () => {
@@ -1582,7 +1601,7 @@ function StudyModal({
     }
 
     // ✅ /chat TTS와 동일한 규칙으로 audioId 생성 (세션별 폴더)
-const audioId = `${sessionId}/${messageId}`;
+    const audioId = `${sessionId}/${messageId}`;
 
     try {
       // 이미 재생 중이면 정지 (토글)

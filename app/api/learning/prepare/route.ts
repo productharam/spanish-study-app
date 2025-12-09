@@ -75,7 +75,7 @@ export async function POST(req: NextRequest) {
     }
 
     // 🔐 Authorization 헤더에서 JWT 추출
-    const authHeader = req.headers.get("authorization"); // 소문자/대문자 둘 다 가능
+    const authHeader = req.headers.get("authorization");
     let userId: string | null = null;
 
     if (authHeader?.startsWith("Bearer ")) {
@@ -100,6 +100,7 @@ export async function POST(req: NextRequest) {
     // ✅ 1단계: userId가 있을 때만 Supabase 캐싱 시도
     if (userId) {
       try {
+        // 🔁 동일 유저 + 동일 세션(옵션) + 동일 스페인어 문장 기준으로만 조회
         let query = supabaseServer
           .from("learning_cards")
           .select("id, korean_prompt, hint")
@@ -108,8 +109,11 @@ export async function POST(req: NextRequest) {
           .order("created_at", { ascending: false })
           .limit(1);
 
-        if (sessionId) query = query.eq("session_id", sessionId);
-        if (messageId) query = query.eq("message_id", messageId);
+        if (sessionId) {
+          query = query.eq("session_id", sessionId);
+        }
+        // ❌ messageId 기준 필터는 제거 (프론트 id와 DB id가 다를 수 있음)
+        // if (messageId) query = query.eq("message_id", messageId);
 
         const { data: existingCard, error: existingError } =
           await query.maybeSingle();
@@ -141,16 +145,23 @@ export async function POST(req: NextRequest) {
     // ✅ 3단계: userId가 있을 때만 새 카드 저장
     if (userId) {
       try {
+        // 🔑 message_id는 프론트의 임시 ID와 DB ID가 달라 FK 에러가 날 수 있으므로, 여기서는 사용하지 않음.
+        const insertPayload: any = {
+          user_id: userId,
+          session_id: sessionId ?? null,
+          corrected_spanish: baseSpanish,
+          korean_prompt: korean,
+          hint,
+        };
+
+        // 필요하다면 나중에 "진짜 DB message_id"를 알고 나서 마이그레이션하는 편이 안전함.
+        // if (messageId) {
+        //   insertPayload.message_id = messageId;
+        // }
+
         const { data: inserted, error: insertError } = await supabaseServer
           .from("learning_cards")
-          .insert({
-            user_id: userId,
-            session_id: sessionId ?? null,
-            message_id: messageId ?? null,
-            corrected_spanish: baseSpanish,
-            korean_prompt: korean,
-            hint,
-          })
+          .insert(insertPayload)
           .select("id")
           .single();
 
