@@ -1,3 +1,4 @@
+// app/chat/components/ChatWindow.tsx
 "use client";
 
 import { useEffect, useState, useRef, KeyboardEvent } from "react";
@@ -55,6 +56,9 @@ export default function ChatWindow() {
   // ✅ 대화 시작 여부 & 첫 인사 로딩 상태
   const [hasStarted, setHasStarted] = useState(false);
   const [isStarting, setIsStarting] = useState(false);
+
+  // ✅ /chat 첫 진입 시, 이전 대화 불러오는 동안 상태
+  const [isInitialLoading, setIsInitialLoading] = useState(true);
 
   // ✅ Supabase 세션 ID (가장 최근 or 새로 만든 세션)
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -118,6 +122,8 @@ export default function ChatWindow() {
    */
   useEffect(() => {
     const init = async () => {
+      setIsInitialLoading(true); // 🔥 /chat 들어오자마자 "대화내역 확인중" 상태 시작
+
       try {
         const { data } = await supabase.auth.getUser();
         const currentUser = data.user ?? null;
@@ -134,41 +140,56 @@ export default function ChatWindow() {
           // 게스트 모드에서는 DB에서 이전 대화 불러오지 않음
           setMessages([]);
           setSessionId(null);
+          setHasStarted(false); // 🔴 항상 새 대화 모드
+          return; // ↩️ finally에서 isInitialLoading=false 됨
+        }
+
+        // 🔐 로그인된 상태 → 가장 최근 세션 + 메시지 불러오기
+        const accessToken = await getAccessToken();
+        const res = await fetch("/api/session/latest", {
+          headers: accessToken
+            ? { Authorization: `Bearer ${accessToken}` }
+            : {},
+        });
+
+        const dataLatest = await res.json();
+
+        if (!res.ok || !dataLatest.ok) {
+          console.error("latest session load error:", dataLatest.error);
+          // 에러가 나면 "이전 대화 없음"으로 간주 → Juan에게 인사하기 버튼 노출
+          setMessages([]);
+          setSessionId(null);
           setHasStarted(false);
+          return;
+        }
+
+        if (dataLatest.session && dataLatest.messages?.length) {
+          const restored: ChatMessage[] = dataLatest.messages.map((m: any) => ({
+            id: m.id,
+            role: m.role,
+            content: m.content,
+            details: m.details ?? undefined,
+            isDetailsLoading: false,
+            detailsError: false,
+          }));
+
+          setMessages(restored);
+          setSessionId(dataLatest.session.id);
+          setHasStarted(true); // ✅ 이전 대화가 있으니 바로 "보내기" 모드
         } else {
-          // 로그인된 상태 → 가장 최근 세션 + 메시지 불러오기
-          const accessToken = await getAccessToken(); // 🔐 추가
-          const res = await fetch("/api/session/latest", {
-            headers: accessToken
-              ? { Authorization: `Bearer ${accessToken}` }
-              : {},
-          });
-          const dataLatest = await res.json();
-
-          if (!res.ok || !dataLatest.ok) {
-            console.error("latest session load error:", dataLatest.error);
-            return;
-          }
-
-          if (dataLatest.session && dataLatest.messages) {
-            const restored: ChatMessage[] = dataLatest.messages.map(
-              (m: any) => ({
-                id: m.id,
-                role: m.role,
-                content: m.content,
-                details: m.details ?? undefined,
-                isDetailsLoading: false,
-                detailsError: false,
-              })
-            );
-
-            setMessages(restored);
-            setSessionId(dataLatest.session.id);
-            setHasStarted(restored.length > 0);
-          }
+          // 세션 없거나 메시지가 0개 → 처음 온 것처럼 처리
+          setMessages([]);
+          setSessionId(null);
+          setHasStarted(false);
         }
       } catch (e) {
         console.error("init (auth + latest session) error:", e);
+        // 오류시에도 일단 새 대화 모드로
+        setMessages([]);
+        setSessionId(null);
+        setHasStarted(false);
+      } finally {
+        setIsInitialLoading(false); // 🔥 어떤 경우든 로딩 종료
       }
     };
 
@@ -362,7 +383,7 @@ export default function ChatWindow() {
     });
   };
 
-    // 🔊 TTS: 메시지 1개에 대해 한 번만 API 호출, 이후 재사용
+  // 🔊 TTS: 메시지 1개에 대해 한 번만 API 호출, 이후 재사용
   const handlePlayTTS = async (message: ChatMessage) => {
     try {
       // 게스트 모드에서는 TTS 사용 안 함
@@ -459,7 +480,6 @@ export default function ChatWindow() {
       currentAudioRef.current = null;
     }
   };
-
 
   // 🔐 Google 로그인 (로그인 모달에서 사용)
   const loginWithGoogle = async () => {
@@ -1267,7 +1287,21 @@ export default function ChatWindow() {
             paddingTop: "8px",
           }}
         >
-          {!hasStarted ? (
+          {isInitialLoading ? (
+            // 1️⃣ /chat 진입 직후: 이전 대화 확인 중
+            <div
+              style={{
+                width: "100%",
+                padding: "12px 0",
+                textAlign: "center",
+                fontSize: "14px",
+                color: "#9ca3af",
+              }}
+            >
+              대화내역을 확인중입니다...
+            </div>
+          ) : !hasStarted ? (
+            // 2️⃣ 이전 대화 없음 → Juan 인사 버튼
             <button
               onClick={handleStartConversation}
               disabled={isStarting}
@@ -1286,6 +1320,7 @@ export default function ChatWindow() {
               {isStarting ? "Juan 인사 불러오는 중..." : "Juan에게 인사하기 👋"}
             </button>
           ) : (
+            // 3️⃣ 이전 대화 있음 → 입력창 + 보내기 버튼
             <>
               <textarea
                 value={input}
@@ -1325,6 +1360,7 @@ export default function ChatWindow() {
               </button>
             </>
           )}
+
           <p
             style={{
               marginTop: "8px",
