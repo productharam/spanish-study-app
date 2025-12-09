@@ -431,8 +431,8 @@ export default function ChatWindow() {
         return;
       }
 
-      // ✅ 공통 오디오 키: "세션ID-메시지ID"
-      const audioId = `${sessionId}-${message.id}`;
+      // ✅ 공통 오디오 키: "세션ID/메시지ID"  → Supabase에서 세션별 폴더처럼 보임
+const audioId = `${sessionId}/${message.id}`;
 
       setPlayingMessageId(message.id);
 
@@ -441,7 +441,7 @@ export default function ChatWindow() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           text: message.content,
-          audioId, // ✅ 이제 sessionId 대신 audioId 전달
+          audioId, // ✅ sessionId 대신 audioId 전달
         }),
       });
 
@@ -886,9 +886,7 @@ export default function ChatWindow() {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
-              ...(accessToken
-                ? { Authorization: `Bearer ${accessToken}` }
-                : {}),
+              ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
             },
             body: JSON.stringify({
               sessionId: currentSessionId,
@@ -1573,10 +1571,18 @@ function StudyModal({
       return;
     }
 
+    if (!messageId) {
+      alert("메시지 정보가 없어 음성을 재생할 수 없어요 🥲");
+      return;
+    }
+
     if (!card.baseSpanish || !card.baseSpanish.trim()) {
       alert("재생할 스페인어 문장이 없어요.");
       return;
     }
+
+    // ✅ /chat TTS와 동일한 규칙으로 audioId 생성 (세션별 폴더)
+const audioId = `${sessionId}/${messageId}`;
 
     try {
       // 이미 재생 중이면 정지 (토글)
@@ -1613,8 +1619,7 @@ function StudyModal({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           text: card.baseSpanish,
-          sessionId,
-          messageId, // ✅ /chat에서 TTS 한 파일과 동일한 key
+          audioId, // ✅ /chat에서 TTS 한 파일과 동일한 key
         }),
       });
 

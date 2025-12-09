@@ -32,10 +32,9 @@ export async function POST(req: NextRequest) {
     }
 
     const bucket = "tts-audio";
-    const filePath = `${audioId}.mp3`; // ✅ 말풍선 공통 키로 고정
+    const filePath = `${audioId}.mp3`; // ✅ 말풍선/모달 공통 키로 고정
 
     // 1️⃣ 먼저 같은 파일이 이미 있는지 확인 (캐시 체크)
-    let fromCache = false;
     try {
       const { data: existingFile, error: downloadError } =
         await supabaseServer.storage.from(bucket).download(filePath);
@@ -111,7 +110,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    return NextResponse.json({ url: publicUrl, fromCache });
+    return NextResponse.json({ url: publicUrl, fromCache: false });
   } catch (e: any) {
     console.error("TTS route error:", e);
     return NextResponse.json(
