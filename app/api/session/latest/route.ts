@@ -2,97 +2,54 @@
 import { NextResponse } from "next/server";
 import { supabaseServer } from "@/lib/supabaseServerClient";
 
-export async function GET(req: Request) {
+export async function GET() {
   try {
-    const authHeader = req.headers.get("Authorization");
-    const token = authHeader?.startsWith("Bearer ")
-      ? authHeader.slice(7)
-      : undefined;
-
-    if (!token) {
-      return NextResponse.json(
-        { ok: false, error: "Missing access token" },
-        { status: 401 }
-      );
-    }
-
     const {
       data: { user },
       error: authError,
-    } = await supabaseServer.auth.getUser(token);
+    } = await supabaseServer.auth.getUser();
 
+    // 로그인 안 된 상태면: "이전 대화 없음"으로 취급
     if (authError || !user) {
-      return NextResponse.json(
-        { ok: false, error: "Unauthorized" },
-        { status: 401 }
-      );
-    }
-
-    const userId = user.id;
-
-
-    // 1️⃣ 가장 최근 세션 하나 가져오기
-    const { data: session, error: sessionError } = await supabaseServer
-      .from("chat_sessions")
-      .select("*")
-      .eq("user_id", userId)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .single();
-
-    // 세션이 하나도 없는 경우 (첫 방문)
-    if (sessionError && sessionError.code === "PGRST116") {
-      // PGRST116 = no rows found
       return NextResponse.json({
-        ok: true,
-        session: null,
-        messages: [],
+        hasHistory: false,
+        sessionId: null,
       });
     }
 
-    if (sessionError || !session) {
+    // 가장 최근 세션 1개 가져오기
+    const { data: sessions, error } = await supabaseServer
+      .from("chat_sessions")
+      .select("id")
+      .eq("user_id", user.id)
+      .order("created_at", { ascending: false })
+      .limit(1);
+
+    if (error) {
+      console.error("latest session error:", error);
       return NextResponse.json(
-        {
-          ok: false,
-          error: sessionError?.message || "Failed to load latest session",
-        },
+        { error: "Failed to load latest session" },
         { status: 500 }
       );
     }
 
-    // 2️⃣ 해당 세션의 메시지 전부 가져오기 (오래된 순으로)
-    const { data: messages, error: messagesError } = await supabaseServer
-      .from("chat_messages")
-      .select("*")
-      .eq("session_id", session.id)
-      .order("created_at", { ascending: true });
+    const latestSession = sessions && sessions.length > 0 ? sessions[0] : null;
 
-    if (messagesError || !messages) {
-      return NextResponse.json(
-        {
-          ok: false,
-          error: messagesError?.message || "Failed to load messages",
-        },
-        { status: 500 }
-      );
+    if (!latestSession) {
+      return NextResponse.json({
+        hasHistory: false,
+        sessionId: null,
+      });
     }
 
     return NextResponse.json({
-      ok: true,
-      session: {
-        id: session.id,
-        title: session.title,
-        created_at: session.created_at,
-        updated_at: session.updated_at,
-      },
-      messages,
+      hasHistory: true,
+      sessionId: latestSession.id,
     });
-  } catch (e: any) {
+  } catch (e) {
+    console.error(e);
     return NextResponse.json(
-      {
-        ok: false,
-        error: e?.message ?? "Unknown error",
-      },
+      { error: "Unexpected error" },
       { status: 500 }
     );
   }
