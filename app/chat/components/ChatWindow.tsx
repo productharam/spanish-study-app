@@ -17,9 +17,9 @@ type ChatMessage = {
   id: string;
   role: "user" | "assistant";
   content: string;
-  details?: MessageDetails; // ✅ 더보기 내용
-  isDetailsLoading?: boolean; // ✅ 더보기 로딩 상태
-  detailsError?: boolean; // ✅ 더보기 불러오기 실패 여부
+  details?: MessageDetails;
+  isDetailsLoading?: boolean;
+  detailsError?: boolean;
 };
 
 // ✅ 메시지 1개당 학습 카드 정보
@@ -27,54 +27,63 @@ type StudyCard = {
   cardId: string | null;
   korean: string;
   hint?: string;
-  // 학습에 사용한 기준 스페인어 문장 (TTS에 사용)
   baseSpanish: string;
 };
 
-// ✅ messageId -> StudyCard 매핑
 type StudyState = Record<string, StudyCard>;
+
+type ChatFlow = "loading" | "guestNew" | "existingSession" | "newConfigured" | "invalid";
 
 export default function ChatWindow() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
+  // 메시지 & UI 기본 상태
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [isSending, setIsSending] = useState(false);
   const typingIntervalRef = useRef<NodeJS.Timeout | null>(null);
-
   const [expandedMessageIds, setExpandedMessageIds] = useState<string[]>([]);
 
-  // 🔊 TTS 관련 상태 & 캐시
+  // TTS 관련
   const audioCacheRef = useRef<Map<string, string>>(new Map());
   const [playingMessageId, setPlayingMessageId] = useState<string | null>(null);
   const currentAudioRef = useRef<HTMLAudioElement | null>(null);
 
-  const typingSpeed = 20; // ms 단위, 숫자 낮출수록 더 빨리 타이핑됨
+  const typingSpeed = 20;
   const makeId = () => `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
-  // ✅ 대화 시작 여부 & 첫 인사 로딩 상태
-  const [hasStarted, setHasStarted] = useState(false);
-  const [isStarting, setIsStarting] = useState(false);
-
-  // ✅ /chat 첫 진입 시, 이전 대화 불러오는 동안 상태
+  // 플로우 상태
+  const [chatFlow, setChatFlow] = useState<ChatFlow>("loading");
   const [isInitialLoading, setIsInitialLoading] = useState(true);
 
-  // ✅ Supabase 세션 ID (가장 최근 or 새로 만든 세션)
+  // 세션/유저
   const [sessionId, setSessionId] = useState<string | null>(null);
-
-  // ✅ 로그인 / 게스트 체험 관련
+  const [slot, setSlot] = useState<number | null>(null);
   const [user, setUser] = useState<any | null>(null);
   const [isGuest, setIsGuest] = useState(false);
-  const [guestTrialCount, setGuestTrialCount] = useState(0); // 🔄 이제 메모리로만 관리
+
+  // 기존 hasStarted: "첫 인사 이후 실제 채팅 모드로 들어갔는지"
+  const [hasStarted, setHasStarted] = useState(false);
+  const [isMessagesLoading, setIsMessagesLoading] = useState(false);
+  const [messagesError, setMessagesError] = useState<string | null>(null);
+
+  // 게스트 체험 관련
+  const [guestTrialCount, setGuestTrialCount] = useState(0);
   const [showLoginModal, setShowLoginModal] = useState(false);
 
-  // ✅ 학습 상태: 메시지별 학습 카드 캐시
+  // 학습 상태
   const [studyState, setStudyState] = useState<StudyState>({});
   const [isStudyModalOpen, setIsStudyModalOpen] = useState(false);
-  const [activeStudyMessageId, setActiveStudyMessageId] =
-    useState<string | null>(null);
+  const [activeStudyMessageId, setActiveStudyMessageId] = useState<string | null>(null);
   const [isStudyLoading, setIsStudyLoading] = useState(false);
+
+  // 4단계 위저드 상태
+  const [wizardStep, setWizardStep] = useState<1 | 2 | 3 | 4>(1);
+  const [selectedLanguage, setSelectedLanguage] = useState<string | null>(null);
+  const [selectedLevel, setSelectedLevel] = useState<string | null>(null);
+  const [selectedPersona, setSelectedPersona] = useState<string | null>(null);
+  const [isCreatingConfiguredSession, setIsCreatingConfiguredSession] = useState(false);
 
   // 🔐 브라우저 Supabase 세션에서 access token 가져오기
   const getAccessToken = async () => {
@@ -82,114 +91,90 @@ export default function ChatWindow() {
     return data.session?.access_token ?? null;
   };
 
-  // ✅ 스페인어 문장을 "호흡 단위"로 줄바꿈 해주는 함수
+  // ✅ "호흡 단위" 줄바꿈
   const formatAssistantText = (text: string) => {
-    const maxLineLength = 80; // 한 줄 최대 길이
-
+    const maxLineLength = 80;
     const sentences = text.split(/(?<=[.!?¡¿])\s+/);
-
     const lines: string[] = [];
     let currentLine = "";
 
     for (const sentence of sentences) {
       const trimmed = sentence.trim();
       if (!trimmed) continue;
-
       const candidate = currentLine ? currentLine + " " + trimmed : trimmed;
-
       if (candidate.length <= maxLineLength) {
         currentLine = candidate;
       } else {
-        if (currentLine) {
-          lines.push(currentLine);
-        }
+        if (currentLine) lines.push(currentLine);
         currentLine = trimmed;
       }
     }
-
-    if (currentLine) {
-      lines.push(currentLine);
-    }
-
+    if (currentLine) lines.push(currentLine);
     return lines.join("\n");
   };
 
   /**
    * ✅ 처음 진입할 때:
-   *  1) Supabase로 현재 유저 확인
-   *  2) 게스트 모드 판단 (로그인 X or mode=guest)
-   *  3) 로그인 모드일 때만 가장 최근 세션 + 메시지 불러오기
+   *  1) Supabase 유저 확인
+   *  2) mode/sessionId/slot/new 쿼리 파라미터로 플로우 결정
    */
   useEffect(() => {
     const init = async () => {
-      setIsInitialLoading(true); // 🔥 /chat 들어오자마자 "대화내역 확인중" 상태 시작
+      setIsInitialLoading(true);
 
       try {
         const { data } = await supabase.auth.getUser();
         const currentUser = data.user ?? null;
         setUser(currentUser);
 
-        const mode = searchParams.get("mode");
-        const guestMode = !currentUser || mode === "guest";
-        setIsGuest(guestMode);
+        const modeParam = searchParams.get("mode");
+        const sessionIdParam = searchParams.get("sessionId");
+        const slotParam = searchParams.get("slot");
+        const newParam = searchParams.get("new");
 
-        if (guestMode) {
-          // 🔄 게스트 모드에서는 항상 0에서 시작 → /chat 나갔다 오면 다시 2회 체험 가능
+        // 1️⃣ 게스트(체험 모드): /chat?mode=guest
+        if (modeParam === "guest" || !currentUser) {
+          setIsGuest(true);
           setGuestTrialCount(0);
-
-          // 게스트 모드에서는 DB에서 이전 대화 불러오지 않음
-          setMessages([]);
+          setChatFlow("guestNew"); // 설정 위저드 → 대화 시작
           setSessionId(null);
-          setHasStarted(false); // 🔴 항상 새 대화 모드
-          return; // ↩️ finally에서 isInitialLoading=false 됨
-        }
-
-        // 🔐 로그인된 상태 → 가장 최근 세션 + 메시지 불러오기
-        const accessToken = await getAccessToken();
-        const res = await fetch("/api/session/latest", {
-          headers: accessToken
-            ? { Authorization: `Bearer ${accessToken}` }
-            : {},
-        });
-
-        const dataLatest = await res.json();
-
-        if (!res.ok || !dataLatest.ok) {
-          console.error("latest session load error:", dataLatest.error);
-          // 에러가 나면 "이전 대화 없음"으로 간주 → Juan에게 인사하기 버튼 노출
+          setSlot(null);
           setMessages([]);
-          setSessionId(null);
           setHasStarted(false);
           return;
         }
 
-        if (dataLatest.session && dataLatest.messages?.length) {
-          const restored: ChatMessage[] = dataLatest.messages.map((m: any) => ({
-            id: m.id,
-            role: m.role,
-            content: m.content,
-            details: m.details ?? undefined,
-            isDetailsLoading: false,
-            detailsError: false,
-          }));
+        // 2️⃣ 로그인 사용자
+        setIsGuest(false);
 
-          setMessages(restored);
-          setSessionId(dataLatest.session.id);
-          setHasStarted(true); // ✅ 이전 대화가 있으니 바로 "보내기" 모드
-        } else {
-          // 세션 없거나 메시지가 0개 → 처음 온 것처럼 처리
+        if (sessionIdParam) {
+          // 기존 세션 이어하기
+          setChatFlow("existingSession");
+          setSessionId(sessionIdParam);
+          setSlot(null);
           setMessages([]);
-          setSessionId(null);
           setHasStarted(false);
+        } else if (newParam === "1" && slotParam) {
+          // 새 세션 시작 (위저드)
+          const n = Number(slotParam);
+          if (n >= 1 && n <= 3) {
+            setChatFlow("newConfigured");
+            setSlot(n);
+            setSessionId(null);
+            setMessages([]);
+            setHasStarted(false);
+          } else {
+            setChatFlow("invalid");
+          }
+        } else {
+          // 홈에서 안 들어온 이상한 접근
+          setChatFlow("invalid");
         }
       } catch (e) {
-        console.error("init (auth + latest session) error:", e);
-        // 오류시에도 일단 새 대화 모드로
-        setMessages([]);
-        setSessionId(null);
-        setHasStarted(false);
+        console.error("init (auth + route) error:", e);
+        setChatFlow("invalid");
       } finally {
-        setIsInitialLoading(false); // 🔥 어떤 경우든 로딩 종료
+        setIsInitialLoading(false);
       }
     };
 
@@ -205,16 +190,79 @@ export default function ChatWindow() {
   }, [searchParams]);
 
   /**
-   * 🔍 GPT(assistant) 말풍선 상세 내용 로드
-   * - /api/details 사용
+   * ✅ 기존 세션 이어가기 모드: /api/session/messages 로 메시지 로드
+   *  - 예상 응답: { ok: true, session: {...}, messages: [...] }
+   */
+  useEffect(() => {
+    const loadExistingSession = async () => {
+      if (chatFlow !== "existingSession") return;
+      if (!sessionId) return;
+      if (isGuest) return; // 게스트는 existingSession 사용 안 함
+
+      setIsMessagesLoading(true);
+      setMessagesError(null);
+
+      try {
+        const accessToken = await getAccessToken();
+
+        const res = await fetch("/api/session/messages", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+          },
+          body: JSON.stringify({ sessionId }),
+        });
+
+        const data = await res.json().catch(() => null);
+
+        if (!res.ok || !data || data.ok === false) {
+          console.error("/api/session/messages error:", data);
+          setMessages([]);
+          setMessagesError("대화 내역을 불러오지 못했어요.");
+          return;
+        }
+
+        const session = data.session;
+        const rows = data.messages ?? [];
+
+        if (!session) {
+          setMessages([]);
+          setMessagesError("세션 정보를 찾을 수 없어요.");
+          return;
+        }
+
+        setSessionId(session.id);
+
+        const restored: ChatMessage[] = rows.map((m: any) => ({
+          id: m.id,
+          role: m.role,
+          content: m.content,
+          details: m.details ?? undefined,
+          isDetailsLoading: false,
+          detailsError: false,
+        }));
+
+        setMessages(restored);
+        setHasStarted(true); // 이미 대화 중인 세션
+      } catch (e) {
+        console.error("loadExistingSession error:", e);
+        setMessagesError("대화 내역을 불러오는 중 오류가 발생했어요.");
+      } finally {
+        setIsMessagesLoading(false);
+      }
+    };
+
+    loadExistingSession();
+  }, [chatFlow, sessionId, isGuest]);
+
+  /**
+   * 🔍 GPT(assistant) 말풍선 상세 내용 로드 - /api/details
    */
   const loadDetails = async (id: string, text: string) => {
-    // 1) 로딩 시작 표시
     setMessages((prev) =>
       prev.map((m) =>
-        m.id === id
-          ? { ...m, isDetailsLoading: true, detailsError: false }
-          : m
+        m.id === id ? { ...m, isDetailsLoading: true, detailsError: false } : m
       )
     );
 
@@ -231,7 +279,6 @@ export default function ChatWindow() {
         throw new Error("Details API error");
       }
 
-      // 2) 정상 응답 → details 저장
       setMessages((prev) =>
         prev.map((m) =>
           m.id === id
@@ -251,17 +298,10 @@ export default function ChatWindow() {
       );
     } catch (e) {
       console.error("loadDetails error:", e);
-
-      // 3) 실패 시: 로딩 끄고, 에러 플래그만 세우기 (details는 비움)
       setMessages((prev) =>
         prev.map((m) =>
           m.id === id
-            ? {
-                ...m,
-                isDetailsLoading: false,
-                detailsError: true,
-                details: undefined,
-              }
+            ? { ...m, isDetailsLoading: false, detailsError: true, details: undefined }
             : m
         )
       );
@@ -269,16 +309,12 @@ export default function ChatWindow() {
   };
 
   /**
-   * 🔍 내(user) 말풍선 상세 내용 로드
-   * - /api/details-user 사용
+   * 🔍 내(user) 말풍선 상세 내용 로드 - /api/details-user
    */
   const loadUserDetails = async (id: string, text: string) => {
-    // 1) 로딩 시작 표시
     setMessages((prev) =>
       prev.map((m) =>
-        m.id === id
-          ? { ...m, isDetailsLoading: true, detailsError: false }
-          : m
+        m.id === id ? { ...m, isDetailsLoading: true, detailsError: false } : m
       )
     );
 
@@ -295,7 +331,6 @@ export default function ChatWindow() {
         throw new Error("Details-User API error");
       }
 
-      // 2) 정상 응답 → details 저장 (correction 포함)
       setMessages((prev) =>
         prev.map((m) =>
           m.id === id
@@ -316,68 +351,43 @@ export default function ChatWindow() {
       );
     } catch (e) {
       console.error("loadUserDetails error:", e);
-
-      // 3) 실패 시: 로딩 끄고, 에러 플래그만 세우기 (details는 비움)
       setMessages((prev) =>
         prev.map((m) =>
           m.id === id
-            ? {
-                ...m,
-                isDetailsLoading: false,
-                detailsError: true,
-                details: undefined,
-              }
+            ? { ...m, isDetailsLoading: false, detailsError: true, details: undefined }
             : m
         )
       );
     }
   };
 
-  // GPT 말풍선 더보기 (오른쪽)
-  const toggleDetails = (
-    id: string,
-    text: string,
-    alreadyHasDetails: boolean
-  ) => {
+  // GPT 말풍선 더보기
+  const toggleDetails = (id: string, text: string, alreadyHasDetails: boolean) => {
     setExpandedMessageIds((prev) => {
       const isExpanded = prev.includes(id);
       if (isExpanded) {
-        // 이미 열려 있으면 -> 닫기
         return prev.filter((x) => x !== id);
       } else {
-        // 닫혀 있던 걸 연다
         const next = [...prev, id];
-
-        // 👉 성공한 details가 없을 때만 로드 시작
         if (!alreadyHasDetails) {
           loadDetails(id, text);
         }
-
         return next;
       }
     });
   };
 
-  // 내 말풍선 더보기 (왼쪽)
-  const toggleUserDetails = (
-    id: string,
-    text: string,
-    alreadyHasDetails: boolean
-  ) => {
+  // 내 말풍선 더보기
+  const toggleUserDetails = (id: string, text: string, alreadyHasDetails: boolean) => {
     setExpandedMessageIds((prev) => {
       const isExpanded = prev.includes(id);
       if (isExpanded) {
-        // 이미 열려 있으면 -> 닫기
         return prev.filter((x) => x !== id);
       } else {
-        // 닫혀 있던 걸 연다
         const next = [...prev, id];
-
-        // 👉 성공한 details가 없을 때만 로드 시작
         if (!alreadyHasDetails) {
           loadUserDetails(id, text);
         }
-
         return next;
       }
     });
@@ -386,10 +396,11 @@ export default function ChatWindow() {
   // 🔊 TTS: 메시지 1개에 대해 한 번만 API 호출, 이후 재사용
   const handlePlayTTS = async (message: ChatMessage) => {
     try {
-      // 게스트 모드에서는 TTS 사용 안 함
-      if (isGuest) return;
+      if (isGuest) {
+        alert("TTS는 로그인 후 사용할 수 있어요 🙂");
+        return;
+      }
 
-      // ✅ 0. 이미 이 메시지가 재생 중이면 → 정지(토글)
       if (playingMessageId === message.id && currentAudioRef.current) {
         currentAudioRef.current.pause();
         currentAudioRef.current.currentTime = 0;
@@ -398,7 +409,6 @@ export default function ChatWindow() {
         return;
       }
 
-      // ✅ 1. 다른 오디오가 재생 중이면 먼저 정지
       if (currentAudioRef.current) {
         currentAudioRef.current.pause();
         currentAudioRef.current.currentTime = 0;
@@ -406,7 +416,6 @@ export default function ChatWindow() {
         setPlayingMessageId(null);
       }
 
-      // 2️⃣ 캐시에 URL이 있으면 그대로 재생
       if (audioCacheRef.current.has(message.id)) {
         const existingUrl = audioCacheRef.current.get(message.id)!;
         const audio = new Audio(existingUrl);
@@ -425,13 +434,11 @@ export default function ChatWindow() {
         return;
       }
 
-      // 3️⃣ 캐시에 없으면 서버에 요청
       if (!sessionId) {
         alert("세션 정보가 없어서 음성을 재생할 수 없어요 🥲");
         return;
       }
 
-      // ✅ 공통 오디오 키: "세션ID/메시지ID"  → Supabase에서 세션별 폴더처럼 보임
       const audioId = `${sessionId}/${message.id}`;
 
       setPlayingMessageId(message.id);
@@ -441,7 +448,7 @@ export default function ChatWindow() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           text: message.content,
-          audioId, // ✅ sessionId 대신 audioId 전달
+          audioId,
         }),
       });
 
@@ -454,11 +461,8 @@ export default function ChatWindow() {
       const data = await res.json();
       const url = data.url as string | undefined;
 
-      if (!url) {
-        throw new Error("TTS URL이 응답에 없어요");
-      }
+      if (!url) throw new Error("TTS URL이 응답에 없어요");
 
-      // 4️⃣ 캐시에 저장 후 재생 (프론트 캐시: message.id 기준)
       audioCacheRef.current.set(message.id, url);
 
       const audio = new Audio(url);
@@ -481,21 +485,18 @@ export default function ChatWindow() {
     }
   };
 
-  // 🔐 Google 로그인 (로그인 모달에서 사용)
+  // 로그인 모달 관련
   const loginWithGoogle = async () => {
     try {
       const origin =
-        typeof window !== "undefined"
-          ? window.location.origin
-          : "http://localhost:3000";
+        typeof window !== "undefined" ? window.location.origin : "http://localhost:3000";
 
-      const redirectTo = `${origin}/chat`;
+      // ✅ 수정: /chat 이 아니라 /auth/callback 으로 보냄
+      const redirectTo = `${origin}/auth/callback`;
 
       const { error } = await supabase.auth.signInWithOAuth({
         provider: "google",
-        options: {
-          redirectTo,
-        },
+        options: { redirectTo },
       });
 
       if (error) {
@@ -508,15 +509,11 @@ export default function ChatWindow() {
     }
   };
 
-  const closeLoginModal = () => {
-    setShowLoginModal(false);
-  };
+  const closeLoginModal = () => setShowLoginModal(false);
 
-  const goHome = () => {
-    router.push("/");
-  };
+  const goHome = () => router.push("/");
 
-  // 타자 효과로 assistant 메시지 출력
+  // 타자 효과
   const startTypewriter = (fullText: string) => {
     if (typingIntervalRef.current) {
       clearInterval(typingIntervalRef.current);
@@ -552,7 +549,7 @@ export default function ChatWindow() {
     }, typingSpeed);
   };
 
-  const handleNewChat = () => {
+  const handleNewChatLocalReset = () => {
     setMessages([]);
     setSessionId(null);
     setHasStarted(false);
@@ -560,16 +557,13 @@ export default function ChatWindow() {
     setPlayingMessageId(null);
     setStudyState({});
     setActiveStudyMessageId(null);
-
     audioCacheRef.current.forEach((url) => URL.revokeObjectURL(url));
     audioCacheRef.current.clear();
   };
 
   const handleDeleteCurrentSession = async () => {
-    console.log("Deleting session id:", sessionId);
-
     if (isGuest) {
-      handleNewChat();
+      handleNewChatLocalReset();
       alert("체험 모드 대화를 초기화했어요.");
       return;
     }
@@ -579,9 +573,7 @@ export default function ChatWindow() {
       return;
     }
 
-    const confirmDelete = window.confirm(
-      "현재 대화를 DB에서도 완전히 삭제할까요?"
-    );
+    const confirmDelete = window.confirm("현재 대화를 DB에서도 완전히 삭제할까요?");
     if (!confirmDelete) return;
 
     try {
@@ -596,14 +588,21 @@ export default function ChatWindow() {
         body: JSON.stringify({ sessionId }),
       });
 
-      const data = await res.json();
-      if (!res.ok || data.error) {
+      const data = await res.json().catch(() => null);
+
+      // 🔍 추가 로그
+console.log("🔍 /api/session/create-configured 응답", {
+  status: res.status,
+  data,
+});
+
+      if (!res.ok || data?.error) {
         console.error("session/delete error:", data);
         alert("대화를 삭제하는 중 문제가 발생했어요 🥲");
         return;
       }
 
-      handleNewChat();
+      handleNewChatLocalReset();
       alert("현재 대화를 깔끔하게 삭제했어요 ✅");
     } catch (e) {
       console.error("session/delete fetch error:", e);
@@ -611,7 +610,7 @@ export default function ChatWindow() {
     }
   };
 
-  // ✅ 학습 모드 시작 (메시지 단위 캐시)
+  // ✅ 학습 모드 시작
   const handleStartStudy = async (message: ChatMessage) => {
     if (isGuest) {
       alert("학습 기능은 로그인 후 사용할 수 있어요 🙂");
@@ -619,8 +618,6 @@ export default function ChatWindow() {
     }
 
     const messageId = message.id;
-
-    // 0️⃣ 이미 이 메시지에 대한 학습 카드가 있다면 → API 호출 없이 모달만 열기
     const existing = studyState[messageId];
     if (existing) {
       setActiveStudyMessageId(messageId);
@@ -628,7 +625,6 @@ export default function ChatWindow() {
       return;
     }
 
-    // 1️⃣ 기준 스페인어 문장 선택
     let baseSpanish = "";
 
     if (message.role === "user" && message.details?.correction) {
@@ -638,7 +634,7 @@ export default function ChatWindow() {
     }
 
     if (!baseSpanish || !baseSpanish.trim()) {
-      alert("학습에 사용할 스페인어 문장이 없어요.");
+      alert("학습에 사용할 문장이 없어요.");
       return;
     }
 
@@ -668,14 +664,13 @@ export default function ChatWindow() {
         return;
       }
 
-      // ✅ 메시지별 학습 카드 캐시
       setStudyState((prev) => ({
         ...prev,
         [messageId]: {
           cardId: data.cardId ?? null,
           korean: data.korean,
           hint: data.hint,
-          baseSpanish, // ✅ TTS용 기준 스페인어 저장
+          baseSpanish,
         },
       }));
 
@@ -689,64 +684,45 @@ export default function ChatWindow() {
     }
   };
 
-  // ✅ 버튼을 눌렀을 때 Juan이 먼저 인사
-  const handleStartConversation = async () => {
-    if (isStarting) return;
+  /**
+   * ✅ 4단계 설정 완료 후 "대화 시작하기"
+   *  - /api/session/create-configured 호출(로그인)
+   *  - 게스트: isGuest:true로 보내 DB 저장 없이 인사만 받아오기(백엔드에서 처리)
+   *
+   *  예상 응답(제안):
+   *   { ok: true, sessionId?: string, greeting: string }
+   */
+  const handleStartConfiguredConversation = async () => {
+    if (!selectedLanguage || !selectedLevel || !selectedPersona) {
+      alert("언어/수준/페르소나를 모두 선택해 주세요.");
+      return;
+    }
 
-    setIsStarting(true);
+    setIsCreatingConfiguredSession(true);
 
     try {
-      const res = await fetch("/api/chat", {
-        method: "POST",
-        body: JSON.stringify({
-          messages: [],
-          isFirst: true,
-        }),
-      });
-
-      const data = await res.json();
-
-      if (!res.ok) {
-        throw new Error(data.error || "Chat API error");
-      }
-
-      const fullGreeting = data.reply;
-      const formattedGreeting = formatAssistantText(fullGreeting);
-
+      // 게스트 모드: 세션ID 없이 인사만 받아오기
       if (isGuest) {
-        setMessages([
-          {
-            id: makeId(),
-            role: "assistant",
-            content: "",
-          },
-        ]);
-        startTypewriter(formattedGreeting);
-        setHasStarted(true);
-      } else {
-        const accessToken = await getAccessToken();
-
-        const createRes = await fetch("/api/session/create-greeting", {
+        const res = await fetch("/api/session/create-configured", {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
-          },
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            greeting: formattedGreeting,
+            language: selectedLanguage,
+            level: selectedLevel,
+            personaType: selectedPersona,
+            isGuest: true,
           }),
         });
 
-        const createData = await createRes.json();
+        const data = await res.json().catch(() => null);
 
-        if (!createRes.ok || !createData.sessionId) {
-          console.error("create-greeting error:", createData);
-          throw new Error(
-            createData.error || "Failed to create greeting session"
-          );
+        if (!res.ok || !data || data.ok === false) {
+          console.error("create-configured (guest) error:", data);
+          throw new Error("대화 시작 설정에 실패했어요.");
         }
 
-        setSessionId(createData.sessionId);
+        const greeting: string = data.greeting ?? data.reply ?? "";
+        const formattedGreeting = formatAssistantText(greeting);
 
         setMessages([
           {
@@ -755,22 +731,56 @@ export default function ChatWindow() {
             content: "",
           },
         ]);
-
         startTypewriter(formattedGreeting);
         setHasStarted(true);
+        setSessionId(null);
+        return;
       }
-    } catch (e) {
-      console.error(e);
+
+      // 로그인 사용자: 세션 생성 + 첫 인사
+      const accessToken = await getAccessToken();
+
+      const res = await fetch("/api/session/create-configured", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+        },
+        body: JSON.stringify({
+          language: selectedLanguage,
+          level: selectedLevel,
+          personaType: selectedPersona,
+          slot,
+        }),
+      });
+
+      const data = await res.json().catch(() => null);
+
+      if (!res.ok || !data || data.ok === false || !data.sessionId) {
+        console.error("create-configured error:", data);
+        throw new Error("대화 세션을 만드는 중 오류가 발생했어요.");
+      }
+
+      const greeting: string = data.greeting ?? data.reply ?? "";
+      const formattedGreeting = formatAssistantText(greeting);
+
+      setSessionId(data.sessionId);
+
       setMessages([
         {
           id: makeId(),
           role: "assistant",
-          content: "처음 인사 불러오는데 문제가 생겼어 🥲",
+          content: "",
         },
       ]);
+      startTypewriter(formattedGreeting);
       setHasStarted(true);
+      setChatFlow("existingSession"); // 이제부터는 '세션 이어가기' 모드로 동작
+    } catch (e) {
+      console.error("handleStartConfiguredConversation error:", e);
+      alert("처음 인사를 불러오는 데 문제가 생겼어요 🥲");
     } finally {
-      setIsStarting(false);
+      setIsCreatingConfiguredSession(false);
     }
   };
 
@@ -802,69 +812,51 @@ export default function ChatWindow() {
     try {
       const accessToken = !isGuest ? await getAccessToken() : null;
 
+      // 로그인 모드인데 세션ID가 없으면 비정상 플로우 → 에러 처리
       if (!isGuest) {
         if (!currentSessionId) {
-          const createRes = await fetch("/api/session/create", {
+          console.error("No sessionId in logged-in mode");
+          alert("세션 정보가 없어 대화를 이어갈 수 없어요. 홈에서 다시 접속해 주세요.");
+          setIsSending(false);
+          return;
+        }
+
+        // user 메시지 DB 저장
+        try {
+          const saveUserRes = await fetch("/api/message/add", {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
               ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
             },
             body: JSON.stringify({
-              firstMessage: trimmed,
+              sessionId: currentSessionId,
+              role: "user",
+              content: trimmed,
             }),
           });
 
-          const createData = await createRes.json();
-
-          if (!createRes.ok || !createData.sessionId) {
-            console.error("session/create error:", createData);
-            alert(
-              "대화 세션을 만드는 중 오류가 발생했어. 잠시 후 다시 시도해줘."
-            );
-            setIsSending(false);
-            return;
+          const saveUserData = await saveUserRes.json().catch(() => null);
+          if (!saveUserRes.ok || saveUserData?.ok === false) {
+            console.error("message/add (user) error:", saveUserData);
           }
-
-          currentSessionId = createData.sessionId as string;
-          setSessionId(currentSessionId);
-        } else {
-          try {
-            const saveUserRes = await fetch("/api/message/add", {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                ...(accessToken
-                  ? { Authorization: `Bearer ${accessToken}` }
-                  : {}),
-              },
-              body: JSON.stringify({
-                sessionId: currentSessionId,
-                role: "user",
-                content: trimmed,
-              }),
-            });
-
-            const saveUserData = await saveUserRes.json();
-            if (!saveUserRes.ok || saveUserData.ok === false) {
-              console.error("message/add (user) error:", saveUserData.error);
-            }
-          } catch (saveErr) {
-            console.error("message/add (user) fetch error:", saveErr);
-          }
+        } catch (saveErr) {
+          console.error("message/add (user) fetch error:", saveErr);
         }
       }
 
+      // GPT 응답
       const chatRes = await fetch("/api/chat", {
         method: "POST",
         body: JSON.stringify({
           messages: newMessages,
           isFirst: false,
+          // 백엔드에서 필요 시 language/level/persona는 sessionId로 조회
         }),
       });
 
-      const chatData = await chatRes.json();
-      const fullAssistantText = chatData.reply;
+      const chatData = await chatRes.json().catch(() => null);
+      const fullAssistantText = chatData?.reply ?? "응답을 가져오지 못했어요.";
 
       const assistantId = makeId();
 
@@ -880,6 +872,7 @@ export default function ChatWindow() {
       const formatted = formatAssistantText(fullAssistantText);
       startTypewriter(formatted);
 
+      // assistant 메시지 DB 저장
       if (!isGuest && currentSessionId) {
         try {
           const saveAssistantRes = await fetch("/api/message/add", {
@@ -895,12 +888,9 @@ export default function ChatWindow() {
             }),
           });
 
-          const saveAssistantData = await saveAssistantRes.json();
-          if (!saveAssistantRes.ok || saveAssistantData.ok === false) {
-            console.error(
-              "message/add (assistant) error:",
-              saveAssistantData.error
-            );
+          const saveAssistantData = await saveAssistantRes.json().catch(() => null);
+          if (!saveAssistantRes.ok || saveAssistantData?.ok === false) {
+            console.error("message/add (assistant) error:", saveAssistantData);
           }
         } catch (saveErr) {
           console.error("message/add (assistant) fetch error:", saveErr);
@@ -917,8 +907,7 @@ export default function ChatWindow() {
         {
           id: makeId(),
           role: "assistant",
-          content:
-            "응답을 가져오는 데 문제가 생겼어. 잠시 후 다시 시도해 줘 🙏",
+          content: "응답을 가져오는 데 문제가 생겼어. 잠시 후 다시 시도해 줘 🙏",
         },
       ]);
     } finally {
@@ -936,6 +925,470 @@ export default function ChatWindow() {
   const activeStudyCard: StudyCard | null =
     activeStudyMessageId ? studyState[activeStudyMessageId] ?? null : null;
 
+  // 언어/레벨/페르소나 라벨
+  const languageLabel = (code: string | null) => {
+    switch (code) {
+      case "en":
+        return "영어";
+      case "zh":
+        return "중국어";
+      case "ja":
+        return "일본어";
+      case "es":
+        return "스페인어";
+      case "fr":
+        return "프랑스어";
+      case "ru":
+        return "러시아어";
+      case "ar":
+        return "아랍어";
+      default:
+        return "언어 미지정";
+    }
+  };
+
+  const levelLabel = (code: string | null) => {
+    switch (code) {
+      case "beginner":
+        return "입문";
+      case "elementary":
+        return "초급";
+      case "intermediate":
+        return "중급";
+      case "advanced":
+        return "고급";
+      default:
+        return "수준 미지정";
+    }
+  };
+
+  const personaLabel = (code: string | null) => {
+    switch (code) {
+      case "friend":
+        return "친한 친구";
+      case "coworker":
+        return "직장 동료";
+      case "teacher":
+        return "엄격한 선생님";
+      case "traveler":
+        return "여행 친구";
+      default:
+        return "페르소나 미지정";
+    }
+  };
+
+  const renderWizardStep = () => {
+    // 1~3단계 공통 버튼 스타일
+    const buttonStyle: React.CSSProperties = {
+      padding: "10px 12px",
+      borderRadius: "999px",
+      border: "1px solid #4b5563",
+      backgroundColor: "#111827",
+      color: "#e5e7eb",
+      fontSize: "13px",
+      cursor: "pointer",
+      whiteSpace: "nowrap",
+    };
+
+    const buttonSelectedStyle: React.CSSProperties = {
+      ...buttonStyle,
+      backgroundColor: "#2563eb",
+      borderColor: "#2563eb",
+    };
+
+    if (wizardStep === 1) {
+      return (
+        <div>
+          <h3
+            style={{
+              fontSize: "18px",
+              color: "#f9fafb",
+              marginBottom: "12px",
+            }}
+          >
+            1단계. 대화할 언어를 선택해 주세요.
+          </h3>
+          <p
+            style={{
+              fontSize: "13px",
+              color: "#9ca3af",
+              marginBottom: "10px",
+            }}
+          >
+            어떤 언어로 대화를 연습하고 싶나요?
+          </p>
+
+          <div
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              gap: "8px",
+              marginBottom: "16px",
+            }}
+          >
+            {[
+              { code: "en", label: "영어" },
+              { code: "zh", label: "중국어" },
+              { code: "ja", label: "일본어" },
+              { code: "es", label: "스페인어" },
+              { code: "fr", label: "프랑스어" },
+              { code: "ru", label: "러시아어" },
+              { code: "ar", label: "아랍어" },
+            ].map((lang) => (
+              <button
+                key={lang.code}
+                onClick={() => setSelectedLanguage(lang.code)}
+                style={
+                  selectedLanguage === lang.code ? buttonSelectedStyle : buttonStyle
+                }
+              >
+                {lang.label}
+              </button>
+            ))}
+          </div>
+
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "flex-end",
+              gap: "8px",
+            }}
+          >
+            <button
+              onClick={() => setWizardStep(2)}
+              disabled={!selectedLanguage}
+              style={{
+                padding: "8px 16px",
+                borderRadius: "999px",
+                border: "none",
+                backgroundColor: selectedLanguage ? "#2563eb" : "#4b5563",
+                color: "#f9fafb",
+                fontSize: "13px",
+                cursor: selectedLanguage ? "pointer" : "not-allowed",
+              }}
+            >
+              다음 단계
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    if (wizardStep === 2) {
+      return (
+        <div>
+          <h3
+            style={{
+              fontSize: "18px",
+              color: "#f9fafb",
+              marginBottom: "12px",
+            }}
+          >
+            2단계. 나의 현재 수준을 선택해 주세요.
+          </h3>
+          <p
+            style={{
+              fontSize: "13px",
+              color: "#9ca3af",
+              marginBottom: "10px",
+            }}
+          >
+            상대가 어느 정도 난이도로 말해주면 좋을까요?
+          </p>
+
+          <div
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              gap: "8px",
+              marginBottom: "16px",
+            }}
+          >
+            {[
+              { code: "beginner", label: "입문 (완전 처음)" },
+              { code: "elementary", label: "초급 (기초 문장 조금)" },
+              { code: "intermediate", label: "중급 (일상 대화 가능)" },
+              { code: "advanced", label: "고급 (자유로운 표현)" },
+            ].map((lv) => (
+              <button
+                key={lv.code}
+                onClick={() => setSelectedLevel(lv.code)}
+                style={selectedLevel === lv.code ? buttonSelectedStyle : buttonStyle}
+              >
+                {lv.label}
+              </button>
+            ))}
+          </div>
+
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              gap: "8px",
+            }}
+          >
+            <button
+              onClick={() => setWizardStep(1)}
+              style={{
+                padding: "8px 16px",
+                borderRadius: "999px",
+                border: "1px solid #4b5563",
+                backgroundColor: "transparent",
+                color: "#e5e7eb",
+                fontSize: "13px",
+                cursor: "pointer",
+              }}
+            >
+              이전
+            </button>
+            <button
+              onClick={() => setWizardStep(3)}
+              disabled={!selectedLevel}
+              style={{
+                padding: "8px 16px",
+                borderRadius: "999px",
+                border: "none",
+                backgroundColor: selectedLevel ? "#2563eb" : "#4b5563",
+                color: "#f9fafb",
+                fontSize: "13px",
+                cursor: selectedLevel ? "pointer" : "not-allowed",
+              }}
+            >
+              다음 단계
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    if (wizardStep === 3) {
+      return (
+        <div>
+          <h3
+            style={{
+              fontSize: "18px",
+              color: "#f9fafb",
+              marginBottom: "12px",
+            }}
+          >
+            3단계. 어떤 스타일의 대화 상대가 좋나요?
+          </h3>
+          <p
+            style={{
+              fontSize: "13px",
+              color: "#9ca3af",
+              marginBottom: "10px",
+            }}
+          >
+            상대의 말투와 역할을 골라보세요.
+          </p>
+
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: "8px",
+              marginBottom: "16px",
+            }}
+          >
+            {[
+              {
+                code: "friend",
+                title: "친한 친구",
+                desc: "편하게 반말처럼 이야기해주는 친구",
+              },
+              {
+                code: "coworker",
+                title: "직장 동료",
+                desc: "업무·일상 이야기를 나누는 동료",
+              },
+              {
+                code: "teacher",
+                title: "엄격한 선생님",
+                desc: "틀린 표현을 바로잡아주는 선생님",
+              },
+              {
+                code: "traveler",
+                title: "여행 친구",
+                desc: "여행·문화 이야기를 좋아하는 친구",
+              },
+            ].map((p) => (
+              <button
+                key={p.code}
+                onClick={() => setSelectedPersona(p.code)}
+                style={
+                  selectedPersona === p.code
+                    ? {
+                        ...buttonSelectedStyle,
+                        width: "100%",
+                        justifyContent: "flex-start",
+                        display: "flex",
+                        flexDirection: "column",
+                        alignItems: "flex-start",
+                        gap: "2px",
+                      }
+                    : {
+                        ...buttonStyle,
+                        width: "100%",
+                        justifyContent: "flex-start",
+                        display: "flex",
+                        flexDirection: "column",
+                        alignItems: "flex-start",
+                        gap: "2px",
+                      }
+                }
+              >
+                <span>{p.title}</span>
+                <span
+                  style={{
+                    fontSize: "11px",
+                    color: "#d1d5db",
+                  }}
+                >
+                  {p.desc}
+                </span>
+              </button>
+            ))}
+          </div>
+
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              gap: "8px",
+            }}
+          >
+            <button
+              onClick={() => setWizardStep(2)}
+              style={{
+                padding: "8px 16px",
+                borderRadius: "999px",
+                border: "1px solid #4b5563",
+                backgroundColor: "transparent",
+                color: "#e5e7eb",
+                fontSize: "13px",
+                cursor: "pointer",
+              }}
+            >
+              이전
+            </button>
+            <button
+              onClick={() => setWizardStep(4)}
+              disabled={!selectedPersona}
+              style={{
+                padding: "8px 16px",
+                borderRadius: "999px",
+                border: "none",
+                backgroundColor: selectedPersona ? "#2563eb" : "#4b5563",
+                color: "#f9fafb",
+                fontSize: "13px",
+                cursor: selectedPersona ? "pointer" : "not-allowed",
+              }}
+            >
+              마지막 단계
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    // 4단계 요약 + 시작
+    return (
+      <div>
+        <h3
+          style={{
+            fontSize: "18px",
+            color: "#f9fafb",
+            marginBottom: "12px",
+          }}
+        >
+          4단계. 이 설정으로 대화를 시작할까요?
+        </h3>
+        <p
+          style={{
+            fontSize: "13px",
+            color: "#9ca3af",
+            marginBottom: "12px",
+          }}
+        >
+          아래 설정으로 첫 인사를 보낸 뒤, 자유롭게 대화를 이어갈 수 있어요.
+        </p>
+
+        <div
+          style={{
+            backgroundColor: "#111827",
+            borderRadius: "12px",
+            padding: "10px 12px",
+            marginBottom: "16px",
+            border: "1px solid #1f2937",
+            fontSize: "13px",
+            color: "#e5e7eb",
+          }}
+        >
+          <div style={{ marginBottom: "6px" }}>
+            <strong>대화 언어</strong> : {languageLabel(selectedLanguage)}
+          </div>
+          <div style={{ marginBottom: "6px" }}>
+            <strong>나의 수준</strong> : {levelLabel(selectedLevel)}
+          </div>
+          <div>
+            <strong>대화 상대</strong> : {personaLabel(selectedPersona)}
+          </div>
+        </div>
+
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            gap: "8px",
+          }}
+        >
+          <button
+            onClick={() => setWizardStep(3)}
+            style={{
+              padding: "8px 16px",
+              borderRadius: "999px",
+              border: "1px solid #4b5563",
+              backgroundColor: "transparent",
+              color: "#e5e7eb",
+              fontSize: "13px",
+              cursor: "pointer",
+            }}
+          >
+            이전
+          </button>
+          <button
+            onClick={handleStartConfiguredConversation}
+            disabled={
+              !selectedLanguage || !selectedLevel || !selectedPersona || isCreatingConfiguredSession
+            }
+            style={{
+              padding: "8px 16px",
+              borderRadius: "999px",
+              border: "none",
+              backgroundColor:
+                !selectedLanguage || !selectedLevel || !selectedPersona || isCreatingConfiguredSession
+                  ? "#4b5563"
+                  : "#22c55e",
+              color: "#f9fafb",
+              fontSize: "13px",
+              fontWeight: 500,
+              cursor:
+                !selectedLanguage || !selectedLevel || !selectedPersona || isCreatingConfiguredSession
+                  ? "not-allowed"
+                  : "pointer",
+            }}
+          >
+            {isCreatingConfiguredSession ? "대화 시작 준비 중..." : "이 설정으로 대화 시작하기"}
+          </button>
+        </div>
+      </div>
+    );
+  };
+
+  const wizardActive =
+    (chatFlow === "guestNew" || chatFlow === "newConfigured") && !hasStarted;
+
   return (
     <>
       <div
@@ -945,7 +1398,67 @@ export default function ChatWindow() {
           flexDirection: "column",
         }}
       >
-        {/* 메시지 목록 */}
+        {/* 상단 헤더 */}
+        <div
+          style={{
+            position: "relative",
+            marginBottom: "10px",
+            minHeight: "32px",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <button
+            onClick={goHome}
+            style={{
+              position: "absolute",
+              left: 0,
+              fontSize: "12px",
+              padding: "6px 10px",
+              borderRadius: "999px",
+              border: "1px solid #555",
+              backgroundColor: "#111",
+              color: "white",
+              cursor: "pointer",
+              whiteSpace: "nowrap",
+            }}
+          >
+            ← 메인으로
+          </button>
+
+          <h2
+            style={{
+              fontSize: "20px",
+              textAlign: "center",
+              margin: 0,
+            }}
+          >
+            다국어 대화 연습
+          </h2>
+
+          <button
+            onClick={handleDeleteCurrentSession}
+            style={{
+              position: "absolute",
+              right: 0,
+              fontSize: "12px",
+              padding: "6px 10px",
+              borderRadius: "999px",
+              border: "1px solid #555",
+              backgroundColor: "#111",
+              color: "#ffdddd",
+              cursor: sessionId || isGuest ? "pointer" : "not-allowed",
+              opacity: sessionId || isGuest ? 1 : 0.5,
+              whiteSpace: "nowrap",
+            }}
+            disabled={!sessionId && !isGuest}
+          >
+            현재 대화 삭제
+          </button>
+        </div>
+
+        {/* 메인 영역 */}
         <div
           style={{
             flex: 1,
@@ -954,339 +1467,8 @@ export default function ChatWindow() {
             marginBottom: "12px",
           }}
         >
-          {/* 상단 헤더 */}
-          <div
-            style={{
-              position: "relative",
-              marginBottom: "10px",
-              minHeight: "32px",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-            }}
-          >
-            <button
-              onClick={goHome}
-              style={{
-                position: "absolute",
-                left: 0,
-                fontSize: "12px",
-                padding: "6px 10px",
-                borderRadius: "999px",
-                border: "1px solid #555",
-                backgroundColor: "#111",
-                color: "white",
-                cursor: "pointer",
-                whiteSpace: "nowrap",
-              }}
-            >
-              ← 메인으로
-            </button>
-
-            <h2
-              style={{
-                fontSize: "20px",
-                textAlign: "center",
-                margin: 0,
-              }}
-            >
-              Juan과의 대화
-            </h2>
-
-            <button
-              onClick={handleDeleteCurrentSession}
-              style={{
-                position: "absolute",
-                right: 0,
-                fontSize: "12px",
-                padding: "6px 10px",
-                borderRadius: "999px",
-                border: "1px solid #555",
-                backgroundColor: "#111",
-                color: "#ffdddd",
-                cursor: sessionId || isGuest ? "pointer" : "not-allowed",
-                opacity: sessionId || isGuest ? 1 : 0.5,
-                whiteSpace: "nowrap",
-              }}
-              disabled={!sessionId && !isGuest}
-            >
-              현재 대화 삭제
-            </button>
-          </div>
-
-          {messages.map((msg) => {
-            const isUserMsg = msg.role === "user";
-            const isAssistant = msg.role === "assistant";
-            const isExpanded = expandedMessageIds.includes(msg.id);
-            const hasDetails = !!msg.details && !msg.detailsError;
-
-            return (
-              <div
-                key={msg.id}
-                style={{
-                  display: "flex",
-                  justifyContent: isUserMsg ? "flex-end" : "flex-start",
-                  marginBottom: "8px",
-                }}
-              >
-                <div
-                  style={{
-                    display: "flex",
-                    flexDirection: "column",
-                    alignItems: isUserMsg ? "flex-end" : "flex-start",
-                    maxWidth: "75%",
-                    gap: "6px",
-                  }}
-                >
-                  {/* 말풍선 + 버튼들 한 줄 */}
-                  <div
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: "8px",
-                      alignSelf: isUserMsg ? "flex-end" : "flex-start",
-                    }}
-                  >
-                    {/* 내 말풍선 */}
-                    {isUserMsg && (
-                      <>
-                        <button
-                          onClick={() =>
-                            toggleUserDetails(msg.id, msg.content, hasDetails)
-                          }
-                          style={{
-                            fontSize: "14px",
-                            padding: "4px 8px",
-                            borderRadius: "999px",
-                            border: "1px solid #555",
-                            backgroundColor: "#111",
-                            color: "white",
-                            cursor: "pointer",
-                          }}
-                          aria-label={isExpanded ? "상세 접기" : "상세 더보기"}
-                        >
-                          {isExpanded ? "−" : "+"}
-                        </button>
-
-                        <button
-                          onClick={() => handleStartStudy(msg)}
-                          style={{
-                            fontSize: "14px",
-                            padding: "4px 8px",
-                            borderRadius: "999px",
-                            border: "1px solid #555",
-                            backgroundColor: "#111",
-                            color: "white",
-                            cursor: isStudyLoading ? "not-allowed" : "pointer",
-                          }}
-                          disabled={isStudyLoading}
-                          aria-label="학습 모드 열기"
-                        >
-                          📘
-                        </button>
-                      </>
-                    )}
-
-                    {/* 말풍선 */}
-                    <div
-                      style={{
-                        backgroundColor: isUserMsg ? "#2563eb" : "#222",
-                        color: "white",
-                        padding: "10px 14px",
-                        borderRadius: "12px",
-                        whiteSpace: "pre-wrap",
-                        fontSize: "14px",
-                      }}
-                    >
-                      {msg.content}
-                    </div>
-
-                    {/* GPT 말풍선 */}
-                    {isAssistant && (
-                      <div style={{ display: "flex", gap: "4px" }}>
-                        <button
-                          onClick={() =>
-                            toggleDetails(msg.id, msg.content, hasDetails)
-                          }
-                          style={{
-                            fontSize: "14px",
-                            padding: "4px 8px",
-                            borderRadius: "999px",
-                            border: "1px solid #555",
-                            backgroundColor: "#111",
-                            color: "white",
-                            cursor: "pointer",
-                          }}
-                          aria-label={
-                            isExpanded ? "상세 접기" : "상세 더보기"
-                          }
-                        >
-                          {isExpanded ? "−" : "+"}
-                        </button>
-
-                        <button
-                          onClick={() => handleStartStudy(msg)}
-                          style={{
-                            fontSize: "14px",
-                            padding: "4px 8px",
-                            borderRadius: "999px",
-                            border: "1px solid #555",
-                            backgroundColor: "#111",
-                            color: "white",
-                            cursor: isStudyLoading ? "not-allowed" : "pointer",
-                          }}
-                          disabled={isStudyLoading}
-                          aria-label="학습 모드 열기"
-                        >
-                          📘
-                        </button>
-
-                        {!isGuest && (
-                          <button
-                            onClick={() => handlePlayTTS(msg)}
-                            style={{
-                              fontSize: "16px",
-                              padding: "4px 8px",
-                              borderRadius: "999px",
-                              border: "1px solid #555",
-                              backgroundColor: "#111",
-                              color: "white",
-                              cursor: "pointer",
-                            }}
-                            aria-label={
-                              playingMessageId === msg.id
-                                ? "스페인어 문장 정지"
-                                : "스페인어 문장 듣기"
-                            }
-                          >
-                            {playingMessageId === msg.id ? "⏹️" : "▶️"}
-                          </button>
-                        )}
-                      </div>
-                    )}
-                  </div>
-
-                  {/* 아래 펼쳐지는 상세 영역 */}
-                  {isExpanded && (
-                    <div
-                      style={{
-                        padding: "10px 12px",
-                        borderRadius: "8px",
-                        backgroundColor: "#181818",
-                        color: "#ddd",
-                        fontSize: "13px",
-                        lineHeight: 1.5,
-                      }}
-                    >
-                      {msg.isDetailsLoading ? (
-                        <div>상세 내용을 불러오는 중이에요… ⏳</div>
-                      ) : msg.detailsError ? (
-                        <div>
-                          <div style={{ marginBottom: "6px" }}>
-                            상세 정보를 불러오지 못했어요 🥲
-                          </div>
-                          <button
-                            onClick={() =>
-                              isUserMsg
-                                ? loadUserDetails(msg.id, msg.content)
-                                : loadDetails(msg.id, msg.content)
-                            }
-                            style={{
-                              marginTop: "4px",
-                              fontSize: "13px",
-                              padding: "4px 8px",
-                              borderRadius: "999px",
-                              border: "1px solid #555",
-                              backgroundColor: "#111",
-                              color: "white",
-                              cursor: "pointer",
-                            }}
-                          >
-                            🔄 상세 다시 시도
-                          </button>
-                        </div>
-                      ) : (
-                        <>
-                          {isUserMsg && msg.details?.correction && (
-                            <div style={{ marginBottom: "6px" }}>
-                              <strong>0. 스페인어 문장 교정</strong>
-                              <div
-                                style={{
-                                  marginTop: "2px",
-                                  whiteSpace: "pre-wrap",
-                                }}
-                              >
-                                {msg.details.correction}
-                              </div>
-                            </div>
-                          )}
-
-                          <div style={{ marginBottom: "6px" }}>
-                            <strong>1. 한글 번역</strong>
-                            <div
-                              style={{
-                                marginTop: "2px",
-                                whiteSpace: "pre-wrap",
-                              }}
-                            >
-                              {msg.details?.ko}
-                            </div>
-                          </div>
-
-                          <div style={{ marginBottom: "6px" }}>
-                            <strong>2. 영어 번역</strong>
-                            <div
-                              style={{
-                                marginTop: "2px",
-                                whiteSpace: "pre-wrap",
-                              }}
-                            >
-                              {msg.details?.en}
-                            </div>
-                          </div>
-
-                          <div style={{ marginBottom: "6px" }}>
-                            <strong>3. 문장 문법 구조</strong>
-                            <div
-                              style={{
-                                marginTop: "2px",
-                                whiteSpace: "pre-wrap",
-                              }}
-                            >
-                              {msg.details?.grammar}
-                            </div>
-                          </div>
-
-                          <div>
-                            <strong>4. 네이티브 TIP</strong>
-                            <div
-                              style={{
-                                marginTop: "2px",
-                                whiteSpace: "pre-wrap",
-                              }}
-                            >
-                              {msg.details?.tip}
-                            </div>
-                          </div>
-                        </>
-                      )}
-                    </div>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-
-        {/* 아래 입력/버튼 영역 */}
-        <div
-          style={{
-            borderTop: "1px solid #333",
-            paddingTop: "8px",
-          }}
-        >
+          {/* 1) 전체 로딩 */}
           {isInitialLoading ? (
-            // 1️⃣ /chat 진입 직후: 이전 대화 확인 중
             <div
               style={{
                 width: "100%",
@@ -1296,84 +1478,395 @@ export default function ChatWindow() {
                 color: "#9ca3af",
               }}
             >
-              대화내역을 확인중입니다...
+              준비 중입니다...
             </div>
-          ) : !hasStarted ? (
-            // 2️⃣ 이전 대화 없음 → Juan 인사 버튼
-            <button
-              onClick={handleStartConversation}
-              disabled={isStarting}
+          ) : chatFlow === "invalid" ? (
+            <div
               style={{
                 width: "100%",
                 padding: "12px 0",
-                borderRadius: "8px",
-                border: "none",
-                cursor: isStarting ? "not-allowed" : "pointer",
-                backgroundColor: isStarting ? "#555" : "#2563eb",
-                color: "white",
-                fontSize: "15px",
-                fontWeight: 500,
+                textAlign: "center",
+                fontSize: "14px",
+                color: "#fca5a5",
               }}
             >
-              {isStarting ? "Juan 인사 불러오는 중..." : "Juan에게 인사하기 👋"}
-            </button>
+              잘못된 접근입니다. 메인 화면에서 다시 들어와 주세요.
+            </div>
+          ) : wizardActive ? (
+            // 2) 새 세션 설정 위저드
+            <div
+              style={{
+                padding: "8px 4px",
+              }}
+            >
+              {renderWizardStep()}
+            </div>
+          ) : chatFlow === "existingSession" && isMessagesLoading ? (
+            // 3) 기존 세션 메시지 로딩
+            <div
+              style={{
+                width: "100%",
+                padding: "12px 0",
+                textAlign: "center",
+                fontSize: "14px",
+                color: "#9ca3af",
+              }}
+            >
+              대화 내역을 불러오는 중입니다...
+            </div>
+          ) : chatFlow === "existingSession" && messagesError ? (
+            <div
+              style={{
+                width: "100%",
+                padding: "12px 0",
+                textAlign: "center",
+                fontSize: "14px",
+                color: "#fca5a5",
+              }}
+            >
+              {messagesError}
+            </div>
           ) : (
-            // 3️⃣ 이전 대화 있음 → 입력창 + 보내기 버튼
+            // 4) 실제 메시지 목록
             <>
-              <textarea
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={handleKeyDown}
-                placeholder="스페인어로 말해볼까? (Enter: 전송, Shift+Enter: 줄바꿈)"
-                style={{
-                  width: "100%",
-                  height: "70px",
-                  resize: "none",
-                  backgroundColor: "#111",
-                  color: "white",
-                  borderRadius: "8px",
-                  border: "1px solid #333",
-                  padding: "8px",
-                  marginBottom: "8px",
-                  fontSize: "14px",
-                }}
-              />
+              {messages.map((msg) => {
+                const isUserMsg = msg.role === "user";
+                const isAssistant = msg.role === "assistant";
+                const isExpanded = expandedMessageIds.includes(msg.id);
+                const hasDetails = !!msg.details && !msg.detailsError;
 
-              <button
-                onClick={handleSend}
-                disabled={isSending}
-                style={{
-                  width: "100%",
-                  padding: "10px 0",
-                  borderRadius: "8px",
-                  border: "none",
-                  cursor: isSending ? "not-allowed" : "pointer",
-                  backgroundColor: isSending ? "#555" : "#2563eb",
-                  color: "white",
-                  fontSize: "14px",
-                  fontWeight: 500,
-                }}
-              >
-                {isSending ? "답변 기다리는 중..." : "보내기"}
-              </button>
+                return (
+                  <div
+                    key={msg.id}
+                    style={{
+                      display: "flex",
+                      justifyContent: isUserMsg ? "flex-end" : "flex-start",
+                      marginBottom: "8px",
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: "flex",
+                        flexDirection: "column",
+                        alignItems: isUserMsg ? "flex-end" : "flex-start",
+                        maxWidth: "75%",
+                        gap: "6px",
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "8px",
+                          alignSelf: isUserMsg ? "flex-end" : "flex-start",
+                        }}
+                      >
+                        {/* 내 말 */}
+                        {isUserMsg && (
+                          <>
+                            <button
+                              onClick={() =>
+                                toggleUserDetails(msg.id, msg.content, hasDetails)
+                              }
+                              style={{
+                                fontSize: "14px",
+                                padding: "4px 8px",
+                                borderRadius: "999px",
+                                border: "1px solid #555",
+                                backgroundColor: "#111",
+                                color: "white",
+                                cursor: "pointer",
+                              }}
+                              aria-label={isExpanded ? "상세 접기" : "상세 더보기"}
+                            >
+                              {isExpanded ? "−" : "+"}
+                            </button>
+
+                            <button
+                              onClick={() => handleStartStudy(msg)}
+                              style={{
+                                fontSize: "14px",
+                                padding: "4px 8px",
+                                borderRadius: "999px",
+                                border: "1px solid #555",
+                                backgroundColor: "#111",
+                                color: "white",
+                                cursor: isStudyLoading ? "not-allowed" : "pointer",
+                              }}
+                              disabled={isStudyLoading}
+                              aria-label="학습 모드 열기"
+                            >
+                              📘
+                            </button>
+                          </>
+                        )}
+
+                        {/* 말풍선 */}
+                        <div
+                          style={{
+                            backgroundColor: isUserMsg ? "#2563eb" : "#222",
+                            color: "white",
+                            padding: "10px 14px",
+                            borderRadius: "12px",
+                            whiteSpace: "pre-wrap",
+                            fontSize: "14px",
+                          }}
+                        >
+                          {msg.content}
+                        </div>
+
+                        {/* GPT 말 */}
+                        {isAssistant && (
+                          <div style={{ display: "flex", gap: "4px" }}>
+                            <button
+                              onClick={() =>
+                                toggleDetails(msg.id, msg.content, hasDetails)
+                              }
+                              style={{
+                                fontSize: "14px",
+                                padding: "4px 8px",
+                                borderRadius: "999px",
+                                border: "1px solid #555",
+                                backgroundColor: "#111",
+                                color: "white",
+                                cursor: "pointer",
+                              }}
+                              aria-label={isExpanded ? "상세 접기" : "상세 더보기"}
+                            >
+                              {isExpanded ? "−" : "+"}
+                            </button>
+
+                            <button
+                              onClick={() => handleStartStudy(msg)}
+                              style={{
+                                fontSize: "14px",
+                                padding: "4px 8px",
+                                borderRadius: "999px",
+                                border: "1px solid #555",
+                                backgroundColor: "#111",
+                                color: "white",
+                                cursor: isStudyLoading ? "not-allowed" : "pointer",
+                              }}
+                              disabled={isStudyLoading}
+                              aria-label="학습 모드 열기"
+                            >
+                              📘
+                            </button>
+
+                            <button
+                              onClick={() => handlePlayTTS(msg)}
+                              style={{
+                                fontSize: "16px",
+                                padding: "4px 8px",
+                                borderRadius: "999px",
+                                border: "1px solid #555",
+                                backgroundColor: "#111",
+                                color: "white",
+                                cursor: "pointer",
+                              }}
+                              aria-label={
+                                playingMessageId === msg.id
+                                  ? "문장 정지"
+                                  : "문장 듣기"
+                              }
+                            >
+                              {playingMessageId === msg.id ? "⏹️" : "▶️"}
+                            </button>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* 상세 영역 */}
+                      {isExpanded && (
+                        <div
+                          style={{
+                            padding: "10px 12px",
+                            borderRadius: "8px",
+                            backgroundColor: "#181818",
+                            color: "#ddd",
+                            fontSize: "13px",
+                            lineHeight: 1.5,
+                          }}
+                        >
+                          {msg.isDetailsLoading ? (
+                            <div>상세 내용을 불러오는 중이에요… ⏳</div>
+                          ) : msg.detailsError ? (
+                            <div>
+                              <div style={{ marginBottom: "6px" }}>
+                                상세 정보를 불러오지 못했어요 🥲
+                              </div>
+                              <button
+                                onClick={() =>
+                                  isUserMsg
+                                    ? loadUserDetails(msg.id, msg.content)
+                                    : loadDetails(msg.id, msg.content)
+                                }
+                                style={{
+                                  marginTop: "4px",
+                                  fontSize: "13px",
+                                  padding: "4px 8px",
+                                  borderRadius: "999px",
+                                  border: "1px solid #555",
+                                  backgroundColor: "#111",
+                                  color: "white",
+                                  cursor: "pointer",
+                                }}
+                              >
+                                🔄 상세 다시 시도
+                              </button>
+                            </div>
+                          ) : (
+                            <>
+                              {isUserMsg && msg.details?.correction && (
+                                <div style={{ marginBottom: "6px" }}>
+                                  <strong>0. 문장 교정</strong>
+                                  <div
+                                    style={{
+                                      marginTop: "2px",
+                                      whiteSpace: "pre-wrap",
+                                    }}
+                                  >
+                                    {msg.details.correction}
+                                  </div>
+                                </div>
+                              )}
+
+                              <div style={{ marginBottom: "6px" }}>
+                                <strong>1. 한글 번역</strong>
+                                <div
+                                  style={{
+                                    marginTop: "2px",
+                                    whiteSpace: "pre-wrap",
+                                  }}
+                                >
+                                  {msg.details?.ko}
+                                </div>
+                              </div>
+
+                              <div style={{ marginBottom: "6px" }}>
+                                <strong>2. 영어 번역</strong>
+                                <div
+                                  style={{
+                                    marginTop: "2px",
+                                    whiteSpace: "pre-wrap",
+                                  }}
+                                >
+                                  {msg.details?.en}
+                                </div>
+                              </div>
+
+                              <div style={{ marginBottom: "6px" }}>
+                                <strong>3. 문법 설명</strong>
+                                <div
+                                  style={{
+                                    marginTop: "2px",
+                                    whiteSpace: "pre-wrap",
+                                  }}
+                                >
+                                  {msg.details?.grammar}
+                                </div>
+                              </div>
+
+                              <div>
+                                <strong>4. 네이티브 TIP</strong>
+                                <div
+                                  style={{
+                                    marginTop: "2px",
+                                    whiteSpace: "pre-wrap",
+                                  }}
+                                >
+                                  {msg.details?.tip}
+                                </div>
+                              </div>
+                            </>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
             </>
           )}
+        </div>
 
-          <p
+        {/* 아래 입력/버튼 영역 */}
+        {!wizardActive && chatFlow !== "invalid" && (
+          <div
             style={{
-              marginTop: "8px",
-              fontSize: "11px",
-              color: "#9ca3af",
-              textAlign: "center",
-              lineHeight: 1.5,
-              whiteSpace: "pre-line",
+              borderTop: "1px solid #333",
+              paddingTop: "8px",
             }}
           >
-            {
-              "⚠️ 민감한 개인정보(실명, 연락처, 계좌번호, 건강정보 등)는 입력하지 말아 주세요.\nAI 답변은 틀릴 수 있으니 중요한 내용은 꼭 다시 확인해 주세요."
-            }
-          </p>
-        </div>
+            {hasStarted ? (
+              <>
+                <textarea
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                  placeholder="배우고 싶은 언어로 말해볼까? (Enter: 전송, Shift+Enter: 줄바꿈)"
+                  style={{
+                    width: "100%",
+                    height: "70px",
+                    resize: "none",
+                    backgroundColor: "#111",
+                    color: "white",
+                    borderRadius: "8px",
+                    border: "1px solid #333",
+                    padding: "8px",
+                    marginBottom: "8px",
+                    fontSize: "14px",
+                  }}
+                />
+
+                <button
+                  onClick={handleSend}
+                  disabled={isSending}
+                  style={{
+                    width: "100%",
+                    padding: "10px 0",
+                    borderRadius: "8px",
+                    border: "none",
+                    cursor: isSending ? "not-allowed" : "pointer",
+                    backgroundColor: isSending ? "#555" : "#2563eb",
+                    color: "white",
+                    fontSize: "14px",
+                    fontWeight: 500,
+                  }}
+                >
+                  {isSending ? "답변 기다리는 중..." : "보내기"}
+                </button>
+              </>
+            ) : (
+              <div
+                style={{
+                  width: "100%",
+                  padding: "12px 0",
+                  textAlign: "center",
+                  fontSize: "14px",
+                  color: "#9ca3af",
+                }}
+              >
+                위에서 설정을 마치고 대화를 시작해 주세요.
+              </div>
+            )}
+
+            <p
+              style={{
+                marginTop: "8px",
+                fontSize: "11px",
+                color: "#9ca3af",
+                textAlign: "center",
+                lineHeight: 1.5,
+                whiteSpace: "pre-line",
+              }}
+            >
+              {
+                "⚠️ 민감한 개인정보(실명, 연락처, 계좌번호, 건강정보 등)는 입력하지 말아 주세요.\nAI 답변은 틀릴 수 있으니 중요한 내용은 꼭 다시 확인해 주세요."
+              }
+            </p>
+          </div>
+        )}
       </div>
 
       {/* 게스트 2회 초과 시 로그인 모달 */}
@@ -1431,7 +1924,7 @@ export default function ChatWindow() {
                 marginBottom: "16px",
               }}
             >
-              지금은 체험 모드라 Juan과의 대화를
+              지금은 체험 모드라 대화를
               <br />
               최대 2회까지만 사용할 수 있어요.
               <br />
@@ -1504,14 +1997,12 @@ function StudyModal({
   const ttsAudioRef = useRef<HTMLAudioElement | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
 
-  // 🔥 모달이 닫힐 때마다 입력/피드백/TTS 상태 모두 초기화
+  // 모달 닫힐 때 상태 초기화
   useEffect(() => {
     if (!isOpen) {
-      // 입력/피드백 리셋
       setAnswer("");
       setFeedback(null);
 
-      // TTS 상태 리셋
       if (ttsAudioRef.current) {
         ttsAudioRef.current.pause();
         ttsAudioRef.current.currentTime = 0;
@@ -1555,10 +2046,7 @@ function StudyModal({
       });
 
       if (!res.ok) {
-        console.error(
-          "learning/answer error:",
-          await res.json().catch(() => ({}))
-        );
+        console.error("learning/answer error:", await res.json().catch(() => ({})));
         alert("피드백을 불러오는 데 실패했어요.");
         return;
       }
@@ -1578,7 +2066,7 @@ function StudyModal({
     setFeedback(null);
   };
 
-  // 🔊 학습 모달 안 TTS 재생
+  // 🔊 학습 모달 안 TTS
   const handlePlayTTS = async () => {
     if (!canUseTTS) {
       alert("TTS는 로그인 후 사용할 수 있어요 🙂");
@@ -1596,15 +2084,13 @@ function StudyModal({
     }
 
     if (!card.baseSpanish || !card.baseSpanish.trim()) {
-      alert("재생할 스페인어 문장이 없어요.");
+      alert("재생할 문장이 없어요.");
       return;
     }
 
-    // ✅ /chat TTS와 동일한 규칙으로 audioId 생성 (세션별 폴더)
     const audioId = `${sessionId}/${messageId}`;
 
     try {
-      // 이미 재생 중이면 정지 (토글)
       if (ttsAudioRef.current) {
         ttsAudioRef.current.pause();
         ttsAudioRef.current.currentTime = 0;
@@ -1615,7 +2101,6 @@ function StudyModal({
 
       setIsTtsLoading(true);
 
-      // 이미 받아둔 URL이 있으면 그대로 재생
       if (ttsAudioUrl) {
         const audio = new Audio(ttsAudioUrl);
         ttsAudioRef.current = audio;
@@ -1638,7 +2123,7 @@ function StudyModal({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           text: card.baseSpanish,
-          audioId, // ✅ /chat에서 TTS 한 파일과 동일한 key
+          audioId,
         }),
       });
 
@@ -1765,36 +2250,34 @@ function StudyModal({
           )}
         </div>
 
-        {/* 🔊 스페인어 TTS 버튼 */}
-        {canUseTTS && (
-          <div
+        {/* 스페인어 TTS 버튼 */}
+        <div
+          style={{
+            marginBottom: "12px",
+            display: "flex",
+            justifyContent: "flex-end",
+          }}
+        >
+          <button
+            onClick={handlePlayTTS}
             style={{
-              marginBottom: "12px",
-              display: "flex",
-              justifyContent: "flex-end",
+              borderRadius: "999px",
+              border: "1px solid #4b5563",
+              padding: "6px 12px",
+              fontSize: "16px",
+              backgroundColor: "#1f2937",
+              color: "#e5e7eb",
+              cursor: isTtsLoading ? "not-allowed" : "pointer",
+              opacity: isTtsLoading ? 0.7 : 1,
             }}
+            disabled={isTtsLoading}
+            aria-label="문장 듣기"
           >
-            <button
-              onClick={handlePlayTTS}
-              style={{
-                borderRadius: "999px",
-                border: "1px solid #4b5563",
-                padding: "6px 12px",
-                fontSize: "16px",
-                backgroundColor: "#1f2937",
-                color: "#e5e7eb",
-                cursor: isTtsLoading ? "not-allowed" : "pointer",
-                opacity: isTtsLoading ? 0.7 : 1,
-              }}
-              disabled={isTtsLoading}
-              aria-label="스페인어 문장 듣기"
-            >
-              {isTtsLoading ? "…" : isPlaying ? "⏹️" : "▶️"}
-            </button>
-          </div>
-        )}
+            {isTtsLoading ? "…" : isPlaying ? "⏹️" : "▶️"}
+          </button>
+        </div>
 
-        {/* 내가 적는 스페인어 문장 */}
+        {/* 내가 적는 문장 */}
         <div style={{ marginBottom: "12px" }}>
           <p
             style={{
@@ -1803,13 +2286,13 @@ function StudyModal({
               marginBottom: "4px",
             }}
           >
-            스페인어로 다시 써보기
+            배운 언어로 다시 써보기
           </p>
           <textarea
             value={answer}
             onChange={(e) => setAnswer(e.target.value)}
             rows={2}
-            placeholder="여기에 스페인어로 문장을 적어주세요."
+            placeholder="여기에 문장을 적어주세요."
             style={{
               width: "100%",
               resize: "none",
@@ -1842,7 +2325,7 @@ function StudyModal({
               <span>{feedback.correct_answer}</span>
             </div>
             <div style={{ marginBottom: "4px" }}>
-              <strong>네이티브 TIP: </strong>
+              <strong>TIP: </strong>
               <span>{feedback.tip}</span>
             </div>
             <div

@@ -1,10 +1,11 @@
+// app/api/session/create-greeting/route.ts
 import { NextResponse } from "next/server";
 import { supabaseServer } from "@/lib/supabaseServerClient";
 
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    const { greeting } = body;
+    const { greeting, language, level, personaType } = body;
 
     if (!greeting) {
       return NextResponse.json(
@@ -31,21 +32,25 @@ export async function POST(req: Request) {
     } = await supabaseServer.auth.getUser(token);
 
     if (authError || !user) {
-      return NextResponse.json(
-        { error: "Unauthorized" },
-        { status: 401 }
-      );
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
     const userId = user.id;
     const title = greeting.substring(0, 20) + "...";
 
+    const lang = language ?? "es";
+    const lvl = level ?? "beginner";
+    const persona = personaType ?? "friend";
+
     const { data: sessionData, error: sessionError } = await supabaseServer
       .from("chat_sessions")
       .insert({
-        user_id: userId,
-        title,
-      })
+  user_id: userId,
+  title,
+  language_code: lang,
+  level_code: lvl,
+  persona_code: persona,
+})
       .select()
       .single();
 
@@ -59,11 +64,12 @@ export async function POST(req: Request) {
     const { error: msgError } = await supabaseServer
       .from("chat_messages")
       .insert({
-        session_id: sessionData.id,
-        user_id: userId,
-        role: "assistant",
-        content: greeting,
-      });
+  user_id: userId,
+  title,
+  language_code: lang,
+  level_code: lvl,
+  persona_code: persona,
+})
 
     if (msgError) {
       return NextResponse.json({ error: msgError.message }, { status: 500 });
