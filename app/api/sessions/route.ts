@@ -37,9 +37,9 @@ export async function GET(req: NextRequest) {
       slot,
       title,
       created_at,
-      language_code:language,
-      level_code:level,
-      persona_code:persona_type
+      language:language_code,
+      level:level_code,
+      persona_type:persona_code
     `
   )
   .eq("user_id", user.id)

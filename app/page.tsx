@@ -35,6 +35,9 @@ export default function Home() {
     null
   );
 
+  // ✅ 세션 카드가 “완전히 준비됐는지” 여부
+  const [isSlotsReady, setIsSlotsReady] = useState(false);
+
   // ✅ 유저 상태 로드
   useEffect(() => {
     const loadUser = async () => {
@@ -58,9 +61,20 @@ export default function Home() {
   // ✅ 로그인된 경우에만 세션 목록 3개 로드
   useEffect(() => {
     const loadSessions = async () => {
-      if (!user) return;
+      // 비로그인: 세션 필요 없음
+      if (!user) {
+        setSlots([
+          { slot: 1, session: null },
+          { slot: 2, session: null },
+          { slot: 3, session: null },
+        ]);
+        setIsSlotsReady(true);
+        return;
+      }
 
       setIsLoadingSessions(true);
+      setIsSlotsReady(false); // 세션 새로 가져오는 동안은 스켈레톤 모드
+
       try {
         const { data } = await supabase.auth.getSession();
         const accessToken = data.session?.access_token ?? null;
@@ -102,18 +116,20 @@ export default function Home() {
         console.error("loadSessions error:", e);
       } finally {
         setIsLoadingSessions(false);
+        setIsSlotsReady(true); // 세션 데이터 준비 완료
       }
     };
 
     if (user) {
       loadSessions();
     } else if (user === null) {
-      // 비로그인은 세션 필요 없음
+      // 비로그인
       setSlots([
         { slot: 1, session: null },
         { slot: 2, session: null },
         { slot: 3, session: null },
       ]);
+      setIsSlotsReady(true);
     }
   }, [user]);
 
@@ -194,6 +210,30 @@ export default function Home() {
     const persona = session.persona_type || "페르소나 미지정";
 
     return `${lang} · ${level} · ${persona}`;
+  };
+
+  // ✅ 언어 코드 기준으로 제목 표시
+  const languageTitle = (session: SessionSummary | null) => {
+    if (!session) return "아직 대화를 시작하지 않았어요";
+
+    switch (session.language) {
+      case "es":
+        return "스페인어 대화";
+      case "en":
+        return "영어 대화";
+      case "ja":
+        return "일본어 대화";
+      case "zh":
+        return "중국어 대화";
+      case "fr":
+        return "프랑스어 대화";
+      case "ru":
+        return "러시아어 대화";
+      case "ar":
+        return "아랍어 대화";
+      default:
+        return "다국어 대화";
+    }
   };
 
   return (
@@ -409,18 +449,16 @@ export default function Home() {
               )}
             </div>
 
-            <div
-              style={{
-                display: "flex",
-                gap: "12px",
-                flexWrap: "wrap",
-              }}
-            >
-              {slots.map(({ slot, session }) => {
-                const isDeleting =
-                  !!(session && deletingSessionId === session.id);
-
-                return (
+            {/* ✅ 세션 준비 전: 스켈레톤 카드 */}
+            {!isSlotsReady ? (
+              <div
+                style={{
+                  display: "flex",
+                  gap: "12px",
+                  flexWrap: "wrap",
+                }}
+              >
+                {[1, 2, 3].map((slot) => (
                   <div
                     key={slot}
                     style={{
@@ -434,116 +472,171 @@ export default function Home() {
                       boxShadow: "0 6px 18px rgba(0,0,0,0.4)",
                       display: "flex",
                       flexDirection: "column",
-                      justifyContent: "space-between",
                       gap: "8px",
                     }}
                   >
-                    <div>
-                      <div
-                        style={{
-                          display: "flex",
-                          justifyContent: "space-between",
-                          alignItems: "center",
-                          marginBottom: "6px",
-                        }}
-                      >
-                        <span
-                          style={{
-                            fontSize: "13px",
-                            color: "#9ca3af",
-                          }}
-                        >
-                          세션 {slot}
-                        </span>
-                        {session && (
-                          <span
-                            style={{
-                              fontSize: "11px",
-                              color: "#6b7280",
-                            }}
-                          >
-                            최근 사용:{" "}
-                            {new Date(
-                              session.created_at
-                            ).toLocaleDateString("ko-KR")}
-                          </span>
-                        )}
-                      </div>
-
-                      <div
-                        style={{
-                          fontSize: "15px",
-                          color: "#f9fafb",
-                          fontWeight: 500,
-                          marginBottom: "4px",
-                          minHeight: "22px",
-                        }}
-                      >
-                        {session
-                          ? session.title || "제목 없는 대화"
-                          : "아직 대화를 시작하지 않았어요"}
-                      </div>
-
-                      <div
-                        style={{
-                          fontSize: "12px",
-                          color: "#9ca3af",
-                          minHeight: "18px",
-                        }}
-                      >
-                        {formatConfigLabel(session)}
-                      </div>
-                    </div>
-
                     <div
                       style={{
-                        marginTop: "8px",
+                        width: "50%",
+                        height: "14px",
+                        borderRadius: "999px",
+                        backgroundColor: "#1f2937",
+                      }}
+                    />
+                    <div
+                      style={{
+                        width: "80%",
+                        height: "18px",
+                        borderRadius: "8px",
+                        backgroundColor: "#1f2937",
+                      }}
+                    />
+                    <div
+                      style={{
+                        width: "70%",
+                        height: "14px",
+                        borderRadius: "8px",
+                        backgroundColor: "#1f2937",
+                      }}
+                    />
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div
+                style={{
+                  display: "flex",
+                  gap: "12px",
+                  flexWrap: "wrap",
+                }}
+              >
+                {slots.map(({ slot, session }) => {
+                  const isDeleting =
+                    !!(session && deletingSessionId === session.id);
+
+                  return (
+                    <div
+                      key={slot}
+                      style={{
+                        flex: "1 1 0",
+                        minWidth: "0",
+                        maxWidth: "320px",
+                        backgroundColor: "#111827",
+                        borderRadius: "16px",
+                        padding: "16px",
+                        border: "1px solid #1f2937",
+                        boxShadow: "0 6px 18px rgba(0,0,0,0.4)",
                         display: "flex",
+                        flexDirection: "column",
                         justifyContent: "space-between",
-                        alignItems: "center",
                         gap: "8px",
                       }}
                     >
-                      <button
-                        onClick={() => handleCardClick(slot, session)}
-                        style={{
-                          flex: 1,
-                          padding: "10px 0",
-                          borderRadius: "999px",
-                          border: "none",
-                          cursor: "pointer",
-                          backgroundColor: session ? "#2563eb" : "#22c55e",
-                          color: "#f9fafb",
-                          fontSize: "14px",
-                          fontWeight: 500,
-                        }}
-                      >
-                        {session ? "대화 이어하기" : "대화 시작하기"}
-                      </button>
-
-                      {session && (
-                        <button
-                          onClick={() => handleDeleteSession(session)}
-                          disabled={isDeleting}
+                      <div>
+                        <div
                           style={{
-                            padding: "6px 10px",
-                            borderRadius: "999px",
-                            border: "1px solid #4b5563",
-                            backgroundColor: "transparent",
-                            color: "#fca5a5",
-                            fontSize: "11px",
-                            cursor: isDeleting ? "not-allowed" : "pointer",
-                            whiteSpace: "nowrap",
+                            display: "flex",
+                            justifyContent: "space-between",
+                            alignItems: "center",
+                            marginBottom: "6px",
                           }}
                         >
-                          {isDeleting ? "삭제 중..." : "이 세션 삭제"}
+                          <span
+                            style={{
+                              fontSize: "13px",
+                              color: "#9ca3af",
+                            }}
+                          >
+                            세션 {slot}
+                          </span>
+                          {session && (
+                            <span
+                              style={{
+                                fontSize: "11px",
+                                color: "#6b7280",
+                              }}
+                            >
+                              최근 사용:{" "}
+                              {new Date(
+                                session.created_at
+                              ).toLocaleDateString("ko-KR")}
+                            </span>
+                          )}
+                        </div>
+
+                        <div
+                          style={{
+                            fontSize: "15px",
+                            color: "#f9fafb",
+                            fontWeight: 500,
+                            marginBottom: "4px",
+                            minHeight: "22px",
+                          }}
+                        >
+                          {languageTitle(session)}
+                        </div>
+
+                        <div
+                          style={{
+                            fontSize: "12px",
+                            color: "#9ca3af",
+                            minHeight: "18px",
+                          }}
+                        >
+                          {formatConfigLabel(session)}
+                        </div>
+                      </div>
+
+                      <div
+                        style={{
+                          marginTop: "8px",
+                          display: "flex",
+                          justifyContent: "space-between",
+                          alignItems: "center",
+                          gap: "8px",
+                        }}
+                      >
+                        <button
+                          onClick={() => handleCardClick(slot, session)}
+                          style={{
+                            flex: 1,
+                            padding: "10px 0",
+                            borderRadius: "999px",
+                            border: "none",
+                            cursor: "pointer",
+                            backgroundColor: session ? "#2563eb" : "#22c55e",
+                            color: "#f9fafb",
+                            fontSize: "14px",
+                            fontWeight: 500,
+                          }}
+                        >
+                          {session ? "대화 이어하기" : "대화 시작하기"}
                         </button>
-                      )}
+
+                        {session && (
+                          <button
+                            onClick={() => handleDeleteSession(session)}
+                            disabled={isDeleting}
+                            style={{
+                              padding: "6px 10px",
+                              borderRadius: "999px",
+                              border: "1px solid #4b5563",
+                              backgroundColor: "transparent",
+                              color: "#fca5a5",
+                              fontSize: "11px",
+                              cursor: isDeleting ? "not-allowed" : "pointer",
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            {isDeleting ? "삭제 중..." : "이 세션 삭제"}
+                          </button>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                );
-              })}
-            </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         )}
       </div>
