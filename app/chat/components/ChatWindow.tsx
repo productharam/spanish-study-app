@@ -1424,7 +1424,7 @@ console.log("🔍 /api/session/create-configured 응답", {
               whiteSpace: "nowrap",
             }}
           >
-            ← 메인으로
+            ← 홈으로
           </button>
 
           <h2
@@ -1434,7 +1434,7 @@ console.log("🔍 /api/session/create-configured 응답", {
               margin: 0,
             }}
           >
-            다국어 대화 연습
+            
           </h2>
 
           <button
@@ -1454,7 +1454,7 @@ console.log("🔍 /api/session/create-configured 응답", {
             }}
             disabled={!sessionId && !isGuest}
           >
-            현재 대화 삭제
+            전체 삭제
           </button>
         </div>
 
@@ -1804,7 +1804,7 @@ console.log("🔍 /api/session/create-configured 응답", {
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
                   onKeyDown={handleKeyDown}
-                  placeholder="배우고 싶은 언어로 말해볼까? (Enter: 전송, Shift+Enter: 줄바꿈)"
+                  placeholder="(Enter: 전송, Shift+Enter: 줄바꿈)"
                   style={{
                     width: "100%",
                     height: "70px",
@@ -1815,7 +1815,7 @@ console.log("🔍 /api/session/create-configured 응답", {
                     border: "1px solid #333",
                     padding: "8px",
                     marginBottom: "8px",
-                    fontSize: "14px",
+                    fontSize: "13px",
                   }}
                 />
 
@@ -1841,7 +1841,7 @@ console.log("🔍 /api/session/create-configured 응답", {
               <div
                 style={{
                   width: "100%",
-                  padding: "12px 0",
+                  padding: "3px 0",
                   textAlign: "center",
                   fontSize: "14px",
                   color: "#9ca3af",
@@ -1862,7 +1862,7 @@ console.log("🔍 /api/session/create-configured 응답", {
               }}
             >
               {
-                "⚠️ 민감한 개인정보(실명, 연락처, 계좌번호, 건강정보 등)는 입력하지 말아 주세요.\nAI 답변은 틀릴 수 있으니 중요한 내용은 꼭 다시 확인해 주세요."
+                "⚠️ 민감한 개인정보는 입력하지 말아 주세요."
               }
             </p>
           </div>

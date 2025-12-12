@@ -304,7 +304,7 @@ export default function Home() {
                 marginBottom: "4px",
               }}
             >
-              다국어 대화 연습
+              말하면서 배우는 언어 챗봇
             </h1>
             <p
               style={{
@@ -313,9 +313,9 @@ export default function Home() {
                 margin: 0,
               }}
             >
-              영어 · 스페인어 · 일본어 등 여러 언어로
+              음성, 번역, 학습 기능을 통해
               <br />
-              친구, 직장동료와 대화하듯 연습해 보세요.
+              실제 대화하면서 언어를 익혀보세요.
             </p>
           </div>
 
