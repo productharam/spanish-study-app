@@ -38,6 +38,20 @@ export default function Home() {
   // ✅ 세션 카드가 “완전히 준비됐는지” 여부
   const [isSlotsReady, setIsSlotsReady] = useState(false);
 
+  // ✅ 화면 폭에 따라 가로/세로 배치 전환
+  const [isNarrow, setIsNarrow] = useState(false);
+
+  useEffect(() => {
+    const handleResize = () => {
+      // 여기 기준 너가 원하는 데 맞춰서 768, 900 등으로 조절 가능
+      setIsNarrow(window.innerWidth < 900);
+    };
+
+    handleResize(); // 첫 렌더 후 한 번 체크
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
+
   // ✅ 유저 상태 로드
   useEffect(() => {
     const loadUser = async () => {
@@ -236,15 +250,29 @@ export default function Home() {
     }
   };
 
-  return (
+  // 카드 공통 스타일에서, 가로/세로에 따라 달라지는 부분만 분기
+  const getCardLayoutStyle = () =>
+    isNarrow
+      ? {
+          width: "100%",
+        }
+      : {
+          flex: "1 1 0",
+          minWidth: "0",
+          maxWidth: "320px",
+        };
+
+    return (
     <main
       style={{
-        height: "100vh",
+        // height: "100vh",          // ❌ 이건 지우고
+        minHeight: "100vh",          // ✅ 스크롤 가능하게
         display: "flex",
         justifyContent: "center",
-        alignItems: "center",
+        alignItems: isNarrow ? "flex-start" : "center", // ✅ 모바일은 위정렬
         backgroundColor: "#000000",
-        padding: "16px",
+        padding: isNarrow ? "32px 16px 16px" : "16px",  // ✅ 모바일은 위쪽 여백 +16
+        boxSizing: "border-box",
       }}
     >
       <div
@@ -258,14 +286,16 @@ export default function Home() {
         }}
       >
         {/* 상단 헤더 영역 */}
-        <div
-          style={{
-            width: "100%",
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-          }}
-        >
+<div
+  style={{
+    width: "100%",
+    display: "flex",
+    flexDirection: isNarrow ? "column" : "row",   // ✅ 좁으면 세로로
+    justifyContent: isNarrow ? "flex-start" : "space-between",
+    alignItems: isNarrow ? "flex-start" : "center",
+    gap: isNarrow ? 12 : 0,                       // 위아래 간격
+  }}
+>
           <div>
             <h1
               style={{
@@ -295,38 +325,41 @@ export default function Home() {
                 사용자 정보를 불러오는 중...
               </span>
             ) : user ? (
-              <div
-                style={{
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: "flex-end",
-                  gap: "4px",
-                }}
-              >
-                <span
-                  style={{
-                    color: "#e5e7eb",
-                    fontSize: "13px",
-                  }}
-                >
-                  {user.email} 님
-                </span>
-                <button
-                  onClick={handleLogout}
-                  style={{
-                    padding: "6px 12px",
-                    fontSize: "12px",
-                    borderRadius: "999px",
-                    border: "1px solid #4b5563",
-                    cursor: "pointer",
-                    backgroundColor: "transparent",
-                    color: "#e5e7eb",
-                  }}
-                >
-                  로그아웃
-                </button>
-              </div>
-            ) : (
+  <div
+    style={{
+      display: "flex",
+      flexDirection: isNarrow ? "row" : "column",   // ✅ 좁으면 가로로 나란히
+      alignItems: isNarrow ? "center" : "flex-end",
+      justifyContent: isNarrow ? "space-between" : "flex-end",
+      gap: isNarrow ? 8 : 4,
+      width: isNarrow ? "100%" : "auto",           // 좁을 땐 전체 폭 사용
+    }}
+  >
+    <span
+      style={{
+        color: "#e5e7eb",
+        fontSize: "13px",
+        wordBreak: "break-all",                    // 긴 이메일 줄바꿈
+      }}
+    >
+      {user.email} 님
+    </span>
+    <button
+      onClick={handleLogout}
+      style={{
+        padding: "6px 12px",
+        fontSize: "12px",
+        borderRadius: "999px",
+        border: "1px solid #4b5563",
+        cursor: "pointer",
+        backgroundColor: "transparent",
+        color: "#e5e7eb",
+      }}
+    >
+      로그아웃
+    </button>
+  </div>
+) : (
               <button
                 onClick={() => router.push("/login")}
                 style={{
@@ -455,16 +488,15 @@ export default function Home() {
                 style={{
                   display: "flex",
                   gap: "12px",
-                  flexWrap: "wrap",
+                  flexDirection: isNarrow ? "column" : "row",
+                  flexWrap: isNarrow ? "nowrap" : "wrap",
                 }}
               >
                 {[1, 2, 3].map((slot) => (
                   <div
                     key={slot}
                     style={{
-                      flex: "1 1 0",
-                      minWidth: "0",
-                      maxWidth: "320px",
+                      ...getCardLayoutStyle(),
                       backgroundColor: "#111827",
                       borderRadius: "16px",
                       padding: "16px",
@@ -507,7 +539,8 @@ export default function Home() {
                 style={{
                   display: "flex",
                   gap: "12px",
-                  flexWrap: "wrap",
+                  flexDirection: isNarrow ? "column" : "row",
+                  flexWrap: isNarrow ? "nowrap" : "wrap",
                 }}
               >
                 {slots.map(({ slot, session }) => {
@@ -518,9 +551,7 @@ export default function Home() {
                     <div
                       key={slot}
                       style={{
-                        flex: "1 1 0",
-                        minWidth: "0",
-                        maxWidth: "320px",
+                        ...getCardLayoutStyle(),
                         backgroundColor: "#111827",
                         borderRadius: "16px",
                         padding: "16px",
