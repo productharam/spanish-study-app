@@ -26,7 +26,6 @@ type ChatMessage = {
 type StudyCard = {
   cardId: string | null;
   korean: string;
-  hint?: string;
   baseSpanish: string;
 };
 
@@ -611,78 +610,102 @@ console.log("🔍 /api/session/create-configured 응답", {
   };
 
   // ✅ 학습 모드 시작
-  const handleStartStudy = async (message: ChatMessage) => {
-    if (isGuest) {
-      alert("학습 기능은 로그인 후 사용할 수 있어요 🙂");
-      return;
-    }
+  // ✅ 학습 모드 시작
+const handleStartStudy = async (message: ChatMessage) => {
+  if (isGuest) {
+    alert("학습 기능은 로그인 후 사용할 수 있어요 🙂");
+    return;
+  }
 
-    const messageId = message.id;
-    const existing = studyState[messageId];
-    if (existing) {
-      setActiveStudyMessageId(messageId);
-      setIsStudyModalOpen(true);
-      return;
-    }
+  const messageId = message.id;
+  const existing = studyState[messageId];
+  if (existing) {
+    setActiveStudyMessageId(messageId);
+    setIsStudyModalOpen(true);
+    return;
+  }
+
+  try {
+    setIsStudyLoading(true);
 
     let baseSpanish = "";
 
-    if (message.role === "user" && message.details?.correction) {
-      baseSpanish = message.details.correction;
+    // ✅ 1) user 말풍선이면: correction이 없으면 먼저 생성
+    if (message.role === "user") {
+      if (!message.details?.correction) {
+        const res = await fetch("/api/details-user", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: message.content, sessionId }),
+        });
+        const data = await res.json().catch(() => null);
+        if (!res.ok || !data) {
+          alert("교정 문장을 준비하는 중 오류가 발생했어요.");
+          return;
+        }
+
+        // message state에 correction 저장
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === messageId
+              ? {
+                  ...m,
+                  details: {
+                    ...(m.details ?? { ko: "", en: "", grammar: "", tip: "" }),
+                    correction: data.correction ?? "",
+                  },
+                }
+              : m
+          )
+        );
+
+        baseSpanish = (data.correction ?? "").trim() || message.content.trim();
+      } else {
+        baseSpanish = message.details.correction.trim();
+      }
     } else {
-      baseSpanish = message.content;
+      // ✅ 2) assistant 말풍선은 그대로
+      baseSpanish = message.content.trim();
     }
 
-    if (!baseSpanish || !baseSpanish.trim()) {
+    if (!baseSpanish) {
       alert("학습에 사용할 문장이 없어요.");
       return;
     }
 
-    try {
-      setIsStudyLoading(true);
+    const accessToken = await getAccessToken();
 
-      const accessToken = await getAccessToken();
+    const prepRes = await fetch("/api/learning/prepare", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+      },
+      body: JSON.stringify({ text: baseSpanish, sessionId, messageId }),
+    });
 
-      const res = await fetch("/api/learning/prepare", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
-        },
-        body: JSON.stringify({
-          text: baseSpanish,
-          sessionId,
-          messageId,
-        }),
-      });
-
-      const data = await res.json().catch(() => null);
-
-      if (!res.ok || !data || data.ok === false) {
-        console.error("learning/prepare error:", data);
-        alert("학습 문장을 준비하는 중 오류가 발생했어요.");
-        return;
-      }
-
-      setStudyState((prev) => ({
-        ...prev,
-        [messageId]: {
-          cardId: data.cardId ?? null,
-          korean: data.korean,
-          hint: data.hint,
-          baseSpanish,
-        },
-      }));
-
-      setActiveStudyMessageId(messageId);
-      setIsStudyModalOpen(true);
-    } catch (e) {
-      console.error("handleStartStudy error:", e);
-      alert("학습 준비 중 오류가 발생했어요.");
-    } finally {
-      setIsStudyLoading(false);
+    const prep = await prepRes.json().catch(() => null);
+    if (!prepRes.ok || !prep || prep.ok === false) {
+      alert("학습 문장을 준비하는 중 오류가 발생했어요.");
+      return;
     }
-  };
+
+    setStudyState((prev) => ({
+      ...prev,
+      [messageId]: {
+        cardId: prep.cardId ?? null,
+        korean: prep.korean,
+        baseSpanish,
+      },
+    }));
+
+    setActiveStudyMessageId(messageId);
+    setIsStudyModalOpen(true);
+  } finally {
+    setIsStudyLoading(false);
+  }
+};
+
 
   /**
    * ✅ 4단계 설정 완료 후 "대화 시작하기"
@@ -847,13 +870,18 @@ console.log("🔍 /api/session/create-configured 응답", {
 
       // GPT 응답
       const chatRes = await fetch("/api/chat", {
-        method: "POST",
-        body: JSON.stringify({
-          messages: newMessages,
-          isFirst: false,
-          // 백엔드에서 필요 시 language/level/persona는 sessionId로 조회
-        }),
-      });
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    messages: newMessages,
+    isFirst: false,
+    sessionId: currentSessionId, // 로그인: 이걸로 DB에서 조회
+    // ✅ 게스트 폴백(있으면 사용, 없으면 백엔드 기본값)
+    language: selectedLanguage,
+    level: selectedLevel,
+    personaType: selectedPersona,
+  }),
+});
 
       const chatData = await chatRes.json().catch(() => null);
       const fullAssistantText = chatData?.reply ?? "응답을 가져오지 못했어요.";
@@ -2237,17 +2265,7 @@ function StudyModal({
           >
             {card.korean}
           </div>
-          {card.hint && (
-            <p
-              style={{
-                marginTop: "6px",
-                fontSize: "12px",
-                color: "#9ca3af",
-              }}
-            >
-              힌트: {card.hint}
-            </p>
-          )}
+          
         </div>
 
         {/* 스페인어 TTS 버튼 */}
@@ -2321,9 +2339,9 @@ function StudyModal({
             }}
           >
             <div style={{ marginBottom: "6px" }}>
-              <strong>정답 예시: </strong>
-              <span>{feedback.correct_answer}</span>
-            </div>
+  <strong>정답 예시: </strong>
+  <span style={{ whiteSpace: "pre-wrap" }}>{card.baseSpanish}</span>
+</div>
             <div style={{ marginBottom: "4px" }}>
               <strong>TIP: </strong>
               <span>{feedback.tip}</span>

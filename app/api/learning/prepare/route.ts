@@ -1,77 +1,102 @@
-// app/api/learning/prepare/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import OpenAI from "openai";
 import { supabaseServer } from "@/lib/supabaseServerClient";
 
-const client = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY!,
-});
+const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
 
-// ✅ 스페인어 문장을 한국어 학습용 문장 + 힌트로 바꾸는 GPT 호출
-async function generateKoreanPrompt(spanishSentence: string) {
-  const prompt = `
-다음 스페인어 문장을 학습용으로 변환해줘.
-
-1) 자연스럽고 간단한 한국어 문장으로 번역
-2) 스페인어 문장을 떠올리기 위한 아주 짧은 힌트(한국어 한 문장)
-
-JSON 형식으로만 출력해:
-
-{
-  "korean": "자연스러운 한국어 번역 한두 문장",
-  "hint": "스페인어 문장을 떠올리는 데 도움 되는 힌트 한 문장"
+function languageName(code: string) {
+  switch (code) {
+    case "en":
+      return "영어";
+    case "ja":
+      return "일본어";
+    case "zh":
+      return "중국어";
+    case "es":
+      return "스페인어";
+    case "fr":
+      return "프랑스어";
+    case "ru":
+      return "러시아어";
+    case "ar":
+      return "아랍어";
+    default:
+      return "해당 언어";
+  }
 }
 
-스페인어 문장: "${spanishSentence}"
-`;
+async function getSessionConfig(sessionId?: string | null) {
+  if (!sessionId) return null;
+
+  const { data, error } = await supabaseServer
+    .from("chat_sessions")
+    .select("language_code, level_code, persona_code")
+    .eq("id", sessionId)
+    .maybeSingle();
+
+  if (error) {
+    console.error("getSessionConfig(/api/learning/prepare) error:", error);
+    return null;
+  }
+  if (!data) return null;
+
+  return {
+    language: (data as any).language_code as string | null,
+    level: (data as any).level_code as string | null,
+    personaType: (data as any).persona_code as string | null,
+  };
+}
+
+async function generateKoreanPrompt(targetLanguageCode: string, sentence: string) {
+  const prompt = `
+다음 ${languageName(targetLanguageCode)} 문장을 학습용으로 변환해줘.
+
+자연스러운 한국어 문장으로 번역
+
+반드시 JSON 형식으로만 출력해:
+
+{
+  "korean": "자연스러운 한국어 번역",
+}
+
+원문: """${sentence}"""
+`.trim();
 
   const res = await client.chat.completions.create({
     model: "gpt-5.1",
     messages: [
       {
         role: "system",
-        content:
-          "너는 스페인어 문장을 학습용 한국어 문장으로 바꿔주는 한국어 튜터야. 항상 JSON만 반환해.",
+        content: "너는 외국어 문장을 한국어 학습용 문장으로 바꿔주는 튜터야. 항상 JSON만 반환해.",
       },
       { role: "user", content: prompt },
     ],
     response_format: { type: "json_object" },
   });
 
-  const raw = res.choices[0].message.content ?? "";
+  const raw = res.choices[0]?.message?.content ?? "";
+  const parsed = JSON.parse(raw);
 
-  try {
-    const parsed = JSON.parse(raw);
-    return {
-      korean: typeof parsed.korean === "string" ? parsed.korean : spanishSentence,
-      hint: typeof parsed.hint === "string" ? parsed.hint : "",
-    };
-  } catch (e) {
-    console.error("JSON parse error in generateKoreanPrompt:", raw);
-    return {
-      korean: spanishSentence,
-      hint: "",
-    };
-  }
+  return {
+    korean: typeof parsed.korean === "string" ? parsed.korean : sentence,
+  };
 }
 
 export async function POST(req: NextRequest) {
   try {
-    const { text, sessionId, messageId } = await req.json();
+    const { text, sessionId } = (await req.json().catch(() => ({}))) as {
+      text?: string;
+      sessionId?: string | null;
+      messageId?: string | null; // (현재는 저장에 안 씀)
+    };
 
     if (!text || typeof text !== "string") {
-      return NextResponse.json(
-        { ok: false, error: "text 필드가 필요합니다." },
-        { status: 400 }
-      );
+      return NextResponse.json({ ok: false, error: "text 필드가 필요합니다." }, { status: 400 });
     }
 
-    const baseSpanish = text.trim();
-    if (!baseSpanish) {
-      return NextResponse.json(
-        { ok: false, error: "유효한 스페인어 문장이 필요합니다." },
-        { status: 400 }
-      );
+    const baseSentence = text.trim();
+    if (!baseSentence) {
+      return NextResponse.json({ ok: false, error: "유효한 문장이 필요합니다." }, { status: 400 });
     }
 
     // 🔐 Authorization 헤더에서 JWT 추출
@@ -80,132 +105,88 @@ export async function POST(req: NextRequest) {
 
     if (authHeader?.startsWith("Bearer ")) {
       const token = authHeader.slice("Bearer ".length).trim();
-
-      // ✅ JWT로 사용자 조회
-      const {
-        data: { user },
-        error: authError,
-      } = await supabaseServer.auth.getUser(token);
-
-      if (authError) {
-        console.error("learning/prepare auth error:", authError.message);
-      }
-
-      userId = user?.id ?? null;
-      console.log("learning/prepare userId:", userId);
-    } else {
-      console.log("learning/prepare: Authorization 헤더 없음");
+      const { data, error } = await supabaseServer.auth.getUser(token);
+      if (error) console.error("learning/prepare auth error:", error.message);
+      userId = data.user?.id ?? null;
     }
 
-    // ✅ 1단계: userId가 있을 때만 Supabase 캐싱 시도
+    // ✅ 세션 설정(언어) 가져오기 (없으면 기본 es)
+    const cfg = await getSessionConfig(sessionId);
+    const language = cfg?.language ?? "es";
+
+    // ✅ 1) 캐시 조회 (로그인 유저만)
     if (userId) {
       try {
-        // 🔁 동일 유저 + 동일 세션(옵션) + 동일 스페인어 문장 기준으로만 조회
         let query = supabaseServer
           .from("learning_cards")
-          .select("id, korean_prompt, hint")
+          .select("id, korean_prompt")
           .eq("user_id", userId)
-          .eq("corrected_spanish", baseSpanish)
+          .eq("corrected_spanish", baseSentence) // ✅ 컬럼명 유지(기존 스키마)
           .order("created_at", { ascending: false })
           .limit(1);
 
-        if (sessionId) {
-          query = query.eq("session_id", sessionId);
-        }
-        // ❌ messageId 기준 필터는 제거 (프론트 id와 DB id가 다를 수 있음)
-        // if (messageId) query = query.eq("message_id", messageId);
+        if (sessionId) query = query.eq("session_id", sessionId);
 
-        const { data: existingCard, error: existingError } =
-          await query.maybeSingle();
-
-        if (existingError) {
-          console.error(
-            "learning_cards existingCard error:",
-            existingError.message
-          );
-        }
-
-        if (existingCard) {
-          // 🔁 이미 카드가 있으면 GPT 호출 없이 바로 반환
+        const { data: existing, error } = await query.maybeSingle();
+        if (error) {
+          console.error("learning_cards existingCard error:", error.message);
+        } else if (existing) {
           return NextResponse.json({
             ok: true,
-            cardId: existingCard.id,
-            korean: existingCard.korean_prompt,
-            hint: existingCard.hint,
+            cardId: existing.id,
+            korean: existing.korean_prompt,
           });
         }
       } catch (e) {
-        console.error("learning_cards select 예외:", e);
+        console.error("learning_cards cache select exception:", e);
       }
     }
 
-    // ✅ 2단계: 카드가 없거나 userId가 없으면 GPT 호출
-    const { korean, hint } = await generateKoreanPrompt(baseSpanish);
+    // ✅ 2) GPT 생성
+    const { korean } = await generateKoreanPrompt(language, baseSentence);
 
-    // ✅ 3단계: userId가 있을 때만 새 카드 저장
+    // ✅ 3) 저장 (로그인 유저만)
     if (userId) {
       try {
-        // 🔑 message_id는 프론트의 임시 ID와 DB ID가 달라 FK 에러가 날 수 있으므로, 여기서는 사용하지 않음.
         const insertPayload: any = {
           user_id: userId,
           session_id: sessionId ?? null,
-          corrected_spanish: baseSpanish,
+          corrected_spanish: baseSentence, // ✅ 컬럼명 유지(기존 스키마)
           korean_prompt: korean,
-          hint,
         };
 
-        // 필요하다면 나중에 "진짜 DB message_id"를 알고 나서 마이그레이션하는 편이 안전함.
-        // if (messageId) {
-        //   insertPayload.message_id = messageId;
-        // }
-
-        const { data: inserted, error: insertError } = await supabaseServer
+        const { data: inserted, error } = await supabaseServer
           .from("learning_cards")
           .insert(insertPayload)
           .select("id")
           .single();
 
-        if (insertError || !inserted) {
-          console.error("learning_cards insert error:", insertError);
+        if (error || !inserted) {
+          console.error("learning_cards insert error:", error);
           return NextResponse.json({
             ok: true,
             cardId: null,
             korean,
-            hint,
             warning: "카드를 저장하지 못했어요.",
           });
         }
 
-        return NextResponse.json({
-          ok: true,
-          cardId: inserted.id,
-          korean,
-          hint,
-        });
+        return NextResponse.json({ ok: true, cardId: inserted.id, korean });
       } catch (e) {
-        console.error("learning_cards insert 예외:", e);
+        console.error("learning_cards insert exception:", e);
         return NextResponse.json({
           ok: true,
           cardId: null,
           korean,
-          hint,
           warning: "카드를 저장하지 못했어요.",
         });
       }
     }
 
-    // ✅ userId가 없을 때: DB 안 쓰고 GPT 결과만 반환
-    return NextResponse.json({
-      ok: true,
-      cardId: null,
-      korean,
-      hint,
-    });
+    // 게스트: 저장 없이 결과만
+    return NextResponse.json({ ok: true, cardId: null, korean });
   } catch (e) {
-    console.error("learning/prepare 서버 오류:", e);
-    return NextResponse.json(
-      { ok: false, error: "서버 오류" },
-      { status: 500 }
-    );
+    console.error("❌ /api/learning/prepare error:", e);
+    return NextResponse.json({ ok: false, error: "서버 오류" }, { status: 500 });
   }
 }

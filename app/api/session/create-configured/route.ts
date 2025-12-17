@@ -3,11 +3,81 @@ import { NextRequest, NextResponse } from "next/server";
 import OpenAI from "openai";
 import { supabaseServer } from "@/lib/supabaseServerClient";
 
-const client = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY!,
-});
+const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
 
-// ✅ GPT 인사 한 줄 만들어주는 함수 (그대로)
+function targetLanguageName(language: string) {
+  switch (language) {
+    case "en":
+      return "English";
+    case "ja":
+      return "日本語";
+    case "zh":
+      return "中文";
+    case "es":
+      return "Español (España)";
+    case "fr":
+      return "Français";
+    case "ru":
+      return "Русский";
+    case "ar":
+      return "العربية";
+    default:
+      return "the target language";
+  }
+}
+
+function levelKo(level: string) {
+  switch (level) {
+    case "beginner":
+      return "입문자";
+    case "elementary":
+      return "초급자";
+    case "intermediate":
+      return "중급자";
+    case "advanced":
+      return "고급자";
+    default:
+      return "학습자";
+  }
+}
+
+function personaKo(personaType: string) {
+  switch (personaType) {
+    case "friend":
+      return "친한 친구";
+    case "coworker":
+      return "직장 동료";
+    case "teacher":
+      return "엄격하지만 친절한 선생님";
+    case "traveler":
+      return "여행을 함께하는 친구";
+    default:
+      return "대화 상대";
+  }
+}
+
+// ✅ 언어별 fallback 인사 (OpenAI 응답이 비어있거나 실패했을 때 대비)
+function fallbackGreeting(language: string) {
+  switch (language) {
+    case "en":
+      return "Hi! Nice to meet you. What’s your name?";
+    case "ja":
+      return "こんにちは！お名前は何ですか？";
+    case "zh":
+      return "你好！你叫什么名字？";
+    case "es":
+      return "¡Hola! ¿Cómo te llamas?";
+    case "fr":
+      return "Bonjour ! Comment tu t’appelles ?";
+    case "ru":
+      return "Привет! Как тебя зовут?";
+    case "ar":
+      return "مرحباً! ما اسمك؟";
+    default:
+      return "Hi! What’s your name?";
+  }
+}
+
 async function generateGreeting(opts: {
   language: string;
   level: string;
@@ -15,81 +85,42 @@ async function generateGreeting(opts: {
 }) {
   const { language, level, personaType } = opts;
 
-  const levelKo =
-    level === "beginner"
-      ? "입문자"
-      : level === "elementary"
-      ? "초급자"
-      : level === "intermediate"
-      ? "중급자"
-      : level === "advanced"
-      ? "고급자"
-      : "학습자";
-
-  const personaKo =
-    personaType === "friend"
-      ? "친한 친구"
-      : personaType === "coworker"
-      ? "직장 동료"
-      : personaType === "teacher"
-      ? "엄격하지만 친절한 선생님"
-      : personaType === "traveler"
-      ? "여행을 함께하는 친구"
-      : "대화 상대";
-
-  const targetLanguageName =
-    language === "en"
-      ? "영어"
-      : language === "ja"
-      ? "일본어"
-      : language === "zh"
-      ? "중국어"
-      : language === "es"
-      ? "스페인어"
-      : language === "fr"
-      ? "프랑스어"
-      : language === "ru"
-      ? "러시아어"
-      : language === "ar"
-      ? "아랍어"
-      : "해당 언어";
-
   const systemPrompt = `
-당신은 ${targetLanguageName} 회화를 도와주는 AI입니다.
-사용자는 ${levelKo} 수준이며, 당신은 ${personaKo} 역할입니다.
+You are starting a chat in ${targetLanguageName(language)}.
+User level: ${levelKo(level)}.
+Your persona: ${personaKo(personaType)}.
 
-규칙:
-- 반드시 ${targetLanguageName}(=코드 ${language})로만 말합니다. 한국어나 영어 설명은 하지 마세요.
-- 첫 인사는 2~3문장 정도로 짧게 합니다.
-- 너무 어려운 표현은 피하고, 사용자가 대답하기 쉬운 질문으로 끝내세요.
-- 존댓말/반말 스타일은 ${personaKo}에 맞게 자연스럽게 조절하세요.
+[VERY IMPORTANT: first greeting length]
+- 채팅이 아니라 실제 말로 대화하고 있는 상황이라고 생각해줘.
+- No long introductions, no explanations.
+- End with ONE easy question the user can answer right away.
+
+[Language]
+- Speak ONLY in ${targetLanguageName(language)}.
+- Do not include Korean/English explanations.
 `.trim();
 
-  const response = await client.responses.create({
+  const res = await client.chat.completions.create({
     model: "gpt-5.1",
-    input: [
+    messages: [
       { role: "system", content: systemPrompt },
-      { role: "user", content: "사용자에게 첫 인사를 해 주세요." },
+      { role: "user", content: "Greet the user and ask a simple question." },
     ],
   });
 
-  const first = response.output[0] as any;
-  const firstContent = first?.content?.[0];
-  const text =
-    firstContent?.type === "output_text"
-      ? firstContent.text
-      : "Hola, ¡empecemos a hablar!";
-
-  return text.trim();
+  // ✅ 스페인어 하드코딩 제거: 언어별 fallback 사용
+  return (
+    res.choices[0]?.message?.content?.trim() ?? fallbackGreeting(language)
+  );
 }
 
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json();
+    const body = await req.json().catch(() => ({}));
     const { language, level, personaType, slot, isGuest } = body as {
-      language: string;
-      level: string;
-      personaType: string;
+      language?: string;
+      level?: string;
+      personaType?: string;
       slot?: number;
       isGuest?: boolean;
     };
@@ -101,24 +132,20 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // ✅ 게스트 모드: DB 건드리지 않고 인사만 생성
+    // ✅ 게스트: DB 저장 없이 인사만
     if (isGuest) {
       const greeting = await generateGreeting({ language, level, personaType });
       return NextResponse.json({ ok: true, greeting }, { status: 200 });
     }
 
     // ✅ 로그인 유저 인증
-    const authHeader =
-      req.headers.get("authorization") || req.headers.get("Authorization");
+    const authHeader = req.headers.get("authorization") || req.headers.get("Authorization");
     const token = authHeader?.startsWith("Bearer ")
-      ? authHeader.slice("Bearer ".length)
+      ? authHeader.slice("Bearer ".length).trim()
       : undefined;
 
     if (!token) {
-      return NextResponse.json(
-        { ok: false, error: "인증 토큰이 없습니다." },
-        { status: 401 }
-      );
+      return NextResponse.json({ ok: false, error: "인증 토큰이 없습니다." }, { status: 401 });
     }
 
     const {
@@ -141,74 +168,56 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // ✅ chat_sessions 업서트
+    // ✅ chat_sessions 업서트 (컬럼명: 네 스키마 기준)
     const { data: sessionRow, error: upsertError } = await supabaseServer
-  .from("chat_sessions")
-  .upsert(
-    {
-      user_id: user.id,
-      slot, // int4
-      language_code: language,      // ✅ 실제 컬럼명
-      level_code: level,            // ✅ 실제 컬럼명
-      persona_code: personaType,    // ✅ 실제 컬럼명
-    },
-    {
-      onConflict: "user_id,slot",
-    }
-  )
-  .select("*")
-  .single();
-
+      .from("chat_sessions")
+      .upsert(
+        {
+          user_id: user.id,
+          slot,
+          language_code: language,
+          level_code: level,
+          persona_code: personaType,
+        },
+        { onConflict: "user_id,slot" }
+      )
+      .select("*")
+      .single();
 
     if (upsertError || !sessionRow) {
-      console.error(
-        "❌ create-configured upsert chat_sessions error:",
-        upsertError
-      );
+      console.error("❌ create-configured upsert chat_sessions error:", upsertError);
       return NextResponse.json(
         {
           ok: false,
-          error:
-            upsertError?.message ??
-            "세션을 저장하는 중 오류가 발생했습니다.",
+          error: upsertError?.message ?? "세션을 저장하는 중 오류가 발생했습니다.",
         },
         { status: 500 }
       );
     }
 
-    // ✅ 인사 문장 생성
     const greeting = await generateGreeting({ language, level, personaType });
 
-    // ✅ 첫 assistant 메시지도 저장
-    const { error: insertMsgError } = await supabaseServer
-      .from("chat_messages")
-      .insert({
-        session_id: sessionRow.id,
-        user_id: user.id,
-        role: "assistant",
-        content: greeting,
-      });
+    // ✅ 첫 assistant 메시지 저장
+    const { error: insertMsgError } = await supabaseServer.from("chat_messages").insert({
+      session_id: sessionRow.id,
+      user_id: user.id,
+      role: "assistant",
+      content: greeting,
+    });
 
     if (insertMsgError) {
-      console.error(
-        "⚠️ create-configured insert greeting error:",
-        insertMsgError
-      );
-      // 메시지 저장 실패해도 세션은 있으니 ok 응답은 그대로 보냄
+      console.error("⚠️ create-configured insert greeting error:", insertMsgError);
     }
 
     return NextResponse.json(
-      {
-        ok: true,
-        sessionId: sessionRow.id,
-        greeting,
-      },
+      { ok: true, sessionId: sessionRow.id, greeting },
       { status: 200 }
     );
   } catch (err: any) {
     console.error("❌ create-configured fatal error:", err);
-    const message =
-      err?.message ?? (typeof err === "string" ? err : JSON.stringify(err));
-    return NextResponse.json({ ok: false, error: message }, { status: 500 });
+    return NextResponse.json(
+      { ok: false, error: err?.message ?? "서버 오류" },
+      { status: 500 }
+    );
   }
 }
