@@ -73,6 +73,10 @@ You are a conversation partner (${personaType}) helping a ${level} learner pract
 Rules:
 - Keep it short and practical.
 - Do NOT lecture.
+- Ignore punctuation differences (.,!?).
+- Ignore accent marks and diacritics (áéíóúñ vs aeioun).
+- Minor casing differences do not matter.
+- Judge meaning and structure, not exact symbols.
 - Respond ONLY in JSON. No extra text.
 
 Return EXACTLY this JSON:

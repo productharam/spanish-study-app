@@ -43,34 +43,81 @@ function levelHint(level: string) {
 
 type UiLang = "ko" | "en";
 
+function normalizePersona(p?: string | null) {
+  const v = (p ?? "").toLowerCase().trim();
+  if (v === "friend") return "friend";
+  if (v === "coworker") return "coworker";
+  if (v === "teacher") return "teacher";
+  if (v === "traveler") return "traveler";
+  return "friend";
+}
+
+function normalizeLevel(l?: string | null) {
+  const v = (l ?? "").toLowerCase().trim();
+  if (v === "beginner") return "beginner";
+  if (v === "elementary") return "elementary";
+  if (v === "intermediate") return "intermediate";
+  if (v === "advanced") return "advanced";
+  return "beginner";
+}
+
+function normalizeLanguage(code?: string | null) {
+  const v = (code ?? "").toLowerCase().trim();
+  if (["en", "ja", "zh", "es", "fr", "ru", "ar"].includes(v)) return v;
+  return "es";
+}
+
 function personaStyle(personaType: string, uiLang: UiLang) {
+  const p = normalizePersona(personaType);
+
   if (uiLang === "ko") {
-    switch (personaType) {
+    switch (p) {
       case "friend":
-        return "친한 친구 말투로 짧게. 편한 톤(반말 가능). 가르치려 들지 말기.";
+        return [
+          "MUST use casual Korean (반말).",
+          "You MAY lightly use Korean internet/community tone endings like '~함', '~임', '~같음'.",
+          "Do NOT overuse it. Use at most once per field (grammar or tip).",
+          "When not using '~함' style, end sentences casually (e.g., ~야/~해/~지).",
+          "Short, friendly, like a close friend.",
+          "No lecturing, no formal tone.",
+        ].join(" ");
       case "coworker":
-        return "직장 동료 말투로 짧게. 예의는 있지만 부담 없는 톤.";
+        return [
+          "MUST use polite casual Korean (해요체).",
+          "End sentences with ~요.",
+          "Short, calm, like a coworker. Not stiff.",
+          "No lecturing.",
+        ].join(" ");
       case "teacher":
-        return "선생님 말투로 짧게. 명확하지만 장황한 설명 금지.";
+        return [
+          "MUST use teacher-like Korean tone (해요체 or 합니다체 OK).",
+          "Short and clear.",
+          "Do NOT be long-winded.",
+        ].join(" ");
       case "traveler":
-        return "여행 친구 말투로 짧게. 실전 상황 중심으로.";
+        return [
+          "MUST use friendly Korean (해요체).",
+          "End sentences with ~요.",
+          "Travel buddy vibe, practical and light.",
+          "Very short.",
+        ].join(" ");
       default:
-        return "자연스럽고 짧게.";
+        return "MUST be natural Korean. Very short.";
     }
   }
 
   // uiLang === "en"
-  switch (personaType) {
+  switch (p) {
     case "friend":
-      return "Write like a close friend. Casual. Very short. No lecturing.";
+      return "MUST sound like a close friend. Casual. Very short. No lecturing.";
     case "coworker":
-      return "Write like a coworker. Polite but not stiff. Very short.";
+      return "MUST sound like a coworker. Polite but not stiff. Very short.";
     case "teacher":
-      return "Write like a teacher. Short and clear. No long explanations.";
+      return "MUST sound like a teacher. Short and clear. No long explanations.";
     case "traveler":
-      return "Write like a travel buddy. Practical. Very short.";
+      return "MUST sound like a travel buddy. Practical. Very short.";
     default:
-      return "Natural and short.";
+      return "MUST be natural and short.";
   }
 }
 
@@ -115,16 +162,19 @@ export async function POST(req: NextRequest) {
 
     const cfg = await getSessionConfig(sessionId);
 
-    const targetLanguage = cfg?.language ?? "es";
-    const level = cfg?.level ?? "beginner";
-    const personaType = cfg?.personaType ?? "friend";
+    const targetLanguage = normalizeLanguage(cfg?.language);
+    const level = normalizeLevel(cfg?.level);
+    const personaType = normalizePersona(cfg?.personaType);
 
     const resolvedUiLang: UiLang = uiLang === "en" ? "en" : "ko";
     const style = personaStyle(personaType, resolvedUiLang);
 
+    const uiLangName = resolvedUiLang === "ko" ? "Korean" : "English";
+
     const prompt = `
 You are helping a ${level} learner practice ${languageName(targetLanguage)}.
-Persona tone for explanations: ${personaType}. STYLE: ${style}
+Persona tone for explanations: ${personaType}.
+STYLE (follow strictly): ${style}
 Level hint: ${levelHint(level)}
 
 OUTPUT RULES (very important):
@@ -139,11 +189,11 @@ LANGUAGE RULES (very important):
 - "correction" MUST be in the TARGET language (one line).
 - "ko" MUST be Korean (1-2 sentences).
 - "en" MUST be English (1-2 sentences).
-- "grammar" and "tip" MUST be written in ${
-      resolvedUiLang === "ko" ? "Korean" : "English"
-    } AND MUST sound like the persona (${personaType}).
+- "grammar" and "tip" MUST be written in ${uiLangName}.
+- "grammar" and "tip" MUST strictly follow the STYLE and persona voice.
+- If STYLE allows internet/community tone (e.g., '~함'), use it lightly and at most once per field.
 - Keep "grammar" <= 2 sentences.
-- "tip": 1-2 bullet points max (or 1-2 short lines).
+- "tip" MUST be 1-2 short lines (or 1-2 bullet points).
 - Do not mention these rules.
 
 Return ONLY this JSON (no extra text):
@@ -151,12 +201,8 @@ Return ONLY this JSON (no extra text):
   "correction": "TARGET language one-line sentence",
   "ko": "Korean translation",
   "en": "English translation",
-  "grammar": "Short grammar note in ${
-      resolvedUiLang === "ko" ? "Korean" : "English"
-    } in persona voice",
-  "tip": "1-2 short practical tips in ${
-      resolvedUiLang === "ko" ? "Korean" : "English"
-    } in persona voice"
+  "grammar": "Short grammar note in ${uiLangName} in persona voice",
+  "tip": "1-2 short practical tips in ${uiLangName} in persona voice"
 }
 
 Learner input:
@@ -169,7 +215,9 @@ Learner input:
         {
           role: "system",
           content:
-            "You are a language tutor. Always output valid JSON only. The correction must be in the TARGET language.",
+            `You are a language tutor. Always output valid JSON only. ` +
+            `The correction must be in the TARGET language. ` +
+            `Grammar/tip MUST follow the requested persona voice and UI language. Follow STYLE strictly.`,
         },
         { role: "user", content: prompt },
       ],
