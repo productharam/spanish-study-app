@@ -44,6 +44,11 @@ export default function ChatWindow() {
   const typingIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const [expandedMessageIds, setExpandedMessageIds] = useState<string[]>([]);
 
+  // ✅ 스크롤 자동 이동(선택 포함)
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const bottomRef = useRef<HTMLDivElement | null>(null);
+  const shouldAutoScrollRef = useRef(true);
+
   // TTS 관련
   const audioCacheRef = useRef<Map<string, string>>(new Map());
   const [playingMessageId, setPlayingMessageId] = useState<string | null>(null);
@@ -83,6 +88,27 @@ export default function ChatWindow() {
   const [selectedLevel, setSelectedLevel] = useState<string | null>(null);
   const [selectedPersona, setSelectedPersona] = useState<string | null>(null);
   const [isCreatingConfiguredSession, setIsCreatingConfiguredSession] = useState(false);
+
+  // ✅ (선택) 사용자가 위로 스크롤하면 자동 스크롤 OFF / 바닥 근처면 ON
+  useEffect(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+
+    const onScroll = () => {
+      const threshold = 80; // 바닥에서 80px 이내면 auto-scroll 유지
+      const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
+      shouldAutoScrollRef.current = isNearBottom;
+    };
+
+    el.addEventListener("scroll", onScroll);
+    return () => el.removeEventListener("scroll", onScroll);
+  }, []);
+
+  // ✅ messages가 바뀔 때, auto-scroll ON이면 맨 아래로
+  useEffect(() => {
+    if (!shouldAutoScrollRef.current) return;
+    bottomRef.current?.scrollIntoView({ behavior: "auto" });
+  }, [messages]);
 
   // 🔐 브라우저 Supabase 세션에서 access token 가져오기
   const getAccessToken = async () => {
@@ -140,6 +166,9 @@ export default function ChatWindow() {
           setSlot(null);
           setMessages([]);
           setHasStarted(false);
+
+          // ✅ 새 시작은 auto-scroll ON
+          shouldAutoScrollRef.current = true;
           return;
         }
 
@@ -153,6 +182,9 @@ export default function ChatWindow() {
           setSlot(null);
           setMessages([]);
           setHasStarted(false);
+
+          // ✅ 이어하기는 무조건 마지막으로
+          shouldAutoScrollRef.current = true;
         } else if (newParam === "1" && slotParam) {
           // 새 세션 시작 (위저드)
           const n = Number(slotParam);
@@ -162,6 +194,9 @@ export default function ChatWindow() {
             setSessionId(null);
             setMessages([]);
             setHasStarted(false);
+
+            // ✅ 새 시작은 auto-scroll ON
+            shouldAutoScrollRef.current = true;
           } else {
             setChatFlow("invalid");
           }
@@ -242,6 +277,9 @@ export default function ChatWindow() {
           detailsError: false,
         }));
 
+        // ✅ 이어하기는 무조건 마지막 위치로
+        shouldAutoScrollRef.current = true;
+
         setMessages(restored);
         setHasStarted(true); // 이미 대화 중인 세션
       } catch (e) {
@@ -260,9 +298,7 @@ export default function ChatWindow() {
    */
   const loadDetails = async (id: string, text: string) => {
     setMessages((prev) =>
-      prev.map((m) =>
-        m.id === id ? { ...m, isDetailsLoading: true, detailsError: false } : m
-      )
+      prev.map((m) => (m.id === id ? { ...m, isDetailsLoading: true, detailsError: false } : m))
     );
 
     try {
@@ -299,9 +335,7 @@ export default function ChatWindow() {
       console.error("loadDetails error:", e);
       setMessages((prev) =>
         prev.map((m) =>
-          m.id === id
-            ? { ...m, isDetailsLoading: false, detailsError: true, details: undefined }
-            : m
+          m.id === id ? { ...m, isDetailsLoading: false, detailsError: true, details: undefined } : m
         )
       );
     }
@@ -312,9 +346,7 @@ export default function ChatWindow() {
    */
   const loadUserDetails = async (id: string, text: string) => {
     setMessages((prev) =>
-      prev.map((m) =>
-        m.id === id ? { ...m, isDetailsLoading: true, detailsError: false } : m
-      )
+      prev.map((m) => (m.id === id ? { ...m, isDetailsLoading: true, detailsError: false } : m))
     );
 
     try {
@@ -352,9 +384,7 @@ export default function ChatWindow() {
       console.error("loadUserDetails error:", e);
       setMessages((prev) =>
         prev.map((m) =>
-          m.id === id
-            ? { ...m, isDetailsLoading: false, detailsError: true, details: undefined }
-            : m
+          m.id === id ? { ...m, isDetailsLoading: false, detailsError: true, details: undefined } : m
         )
       );
     }
@@ -487,8 +517,7 @@ export default function ChatWindow() {
   // 로그인 모달 관련
   const loginWithGoogle = async () => {
     try {
-      const origin =
-        typeof window !== "undefined" ? window.location.origin : "http://localhost:3000";
+      const origin = typeof window !== "undefined" ? window.location.origin : "http://localhost:3000";
 
       // ✅ 수정: /chat 이 아니라 /auth/callback 으로 보냄
       const redirectTo = `${origin}/auth/callback`;
@@ -517,6 +546,9 @@ export default function ChatWindow() {
     if (typingIntervalRef.current) {
       clearInterval(typingIntervalRef.current);
     }
+
+    // ✅ 새 답변이 오면 기본적으로 따라가도록 ON
+    shouldAutoScrollRef.current = true;
 
     let index = 0;
 
@@ -556,6 +588,10 @@ export default function ChatWindow() {
     setPlayingMessageId(null);
     setStudyState({});
     setActiveStudyMessageId(null);
+
+    // ✅ 리셋 시 auto-scroll ON
+    shouldAutoScrollRef.current = true;
+
     audioCacheRef.current.forEach((url) => URL.revokeObjectURL(url));
     audioCacheRef.current.clear();
   };
@@ -590,10 +626,10 @@ export default function ChatWindow() {
       const data = await res.json().catch(() => null);
 
       // 🔍 추가 로그
-console.log("🔍 /api/session/create-configured 응답", {
-  status: res.status,
-  data,
-});
+      console.log("🔍 /api/session/create-configured 응답", {
+        status: res.status,
+        data,
+      });
 
       if (!res.ok || data?.error) {
         console.error("session/delete error:", data);
@@ -610,102 +646,100 @@ console.log("🔍 /api/session/create-configured 응답", {
   };
 
   // ✅ 학습 모드 시작
-  // ✅ 학습 모드 시작
-const handleStartStudy = async (message: ChatMessage) => {
-  if (isGuest) {
-    alert("학습 기능은 로그인 후 사용할 수 있어요 🙂");
-    return;
-  }
+  const handleStartStudy = async (message: ChatMessage) => {
+    if (isGuest) {
+      alert("학습 기능은 로그인 후 사용할 수 있어요 🙂");
+      return;
+    }
 
-  const messageId = message.id;
-  const existing = studyState[messageId];
-  if (existing) {
-    setActiveStudyMessageId(messageId);
-    setIsStudyModalOpen(true);
-    return;
-  }
+    const messageId = message.id;
+    const existing = studyState[messageId];
+    if (existing) {
+      setActiveStudyMessageId(messageId);
+      setIsStudyModalOpen(true);
+      return;
+    }
 
-  try {
-    setIsStudyLoading(true);
+    try {
+      setIsStudyLoading(true);
 
-    let baseSpanish = "";
+      let baseSpanish = "";
 
-    // ✅ 1) user 말풍선이면: correction이 없으면 먼저 생성
-    if (message.role === "user") {
-      if (!message.details?.correction) {
-        const res = await fetch("/api/details-user", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text: message.content, sessionId }),
-        });
-        const data = await res.json().catch(() => null);
-        if (!res.ok || !data) {
-          alert("교정 문장을 준비하는 중 오류가 발생했어요.");
-          return;
+      // ✅ 1) user 말풍선이면: correction이 없으면 먼저 생성
+      if (message.role === "user") {
+        if (!message.details?.correction) {
+          const res = await fetch("/api/details-user", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ text: message.content, sessionId }),
+          });
+          const data = await res.json().catch(() => null);
+          if (!res.ok || !data) {
+            alert("교정 문장을 준비하는 중 오류가 발생했어요.");
+            return;
+          }
+
+          // message state에 correction 저장
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === messageId
+                ? {
+                    ...m,
+                    details: {
+                      ...(m.details ?? { ko: "", en: "", grammar: "", tip: "" }),
+                      correction: data.correction ?? "",
+                    },
+                  }
+                : m
+            )
+          );
+
+          baseSpanish = (data.correction ?? "").trim() || message.content.trim();
+        } else {
+          baseSpanish = message.details.correction.trim();
         }
-
-        // message state에 correction 저장
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === messageId
-              ? {
-                  ...m,
-                  details: {
-                    ...(m.details ?? { ko: "", en: "", grammar: "", tip: "" }),
-                    correction: data.correction ?? "",
-                  },
-                }
-              : m
-          )
-        );
-
-        baseSpanish = (data.correction ?? "").trim() || message.content.trim();
       } else {
-        baseSpanish = message.details.correction.trim();
+        // ✅ 2) assistant 말풍선은 그대로
+        baseSpanish = message.content.trim();
       }
-    } else {
-      // ✅ 2) assistant 말풍선은 그대로
-      baseSpanish = message.content.trim();
+
+      if (!baseSpanish) {
+        alert("학습에 사용할 문장이 없어요.");
+        return;
+      }
+
+      const accessToken = await getAccessToken();
+
+      const prepRes = await fetch("/api/learning/prepare", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+        },
+        body: JSON.stringify({ text: baseSpanish, sessionId, messageId }),
+      });
+
+      const prep = await prepRes.json().catch(() => null);
+      if (!prepRes.ok || !prep || prep.ok === false) {
+        alert("학습 문장을 준비하는 중 오류가 발생했어요.");
+        return;
+      }
+
+      setStudyState((prev) => ({
+        ...prev,
+        [messageId]: {
+          cardId: prep.cardId ?? null,
+          korean: prep.korean,
+          baseSpanish,
+        },
+      }));
+
+      setActiveStudyMessageId(messageId);
+      setIsStudyModalOpen(true);
+    } finally {
+      setIsStudyLoading(false);
     }
-
-    if (!baseSpanish) {
-      alert("학습에 사용할 문장이 없어요.");
-      return;
-    }
-
-    const accessToken = await getAccessToken();
-
-    const prepRes = await fetch("/api/learning/prepare", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
-      },
-      body: JSON.stringify({ text: baseSpanish, sessionId, messageId }),
-    });
-
-    const prep = await prepRes.json().catch(() => null);
-    if (!prepRes.ok || !prep || prep.ok === false) {
-      alert("학습 문장을 준비하는 중 오류가 발생했어요.");
-      return;
-    }
-
-    setStudyState((prev) => ({
-      ...prev,
-      [messageId]: {
-        cardId: prep.cardId ?? null,
-        korean: prep.korean,
-        baseSpanish,
-      },
-    }));
-
-    setActiveStudyMessageId(messageId);
-    setIsStudyModalOpen(true);
-  } finally {
-    setIsStudyLoading(false);
-  }
-};
-
+  };
 
   /**
    * ✅ 4단계 설정 완료 후 "대화 시작하기"
@@ -746,6 +780,9 @@ const handleStartStudy = async (message: ChatMessage) => {
 
         const greeting: string = data.greeting ?? data.reply ?? "";
         const formattedGreeting = formatAssistantText(greeting);
+
+        // ✅ 시작 시 auto-scroll ON
+        shouldAutoScrollRef.current = true;
 
         setMessages([
           {
@@ -789,6 +826,9 @@ const handleStartStudy = async (message: ChatMessage) => {
 
       setSessionId(data.sessionId);
 
+      // ✅ 시작 시 auto-scroll ON
+      shouldAutoScrollRef.current = true;
+
       setMessages([
         {
           id: makeId(),
@@ -824,6 +864,9 @@ const handleStartStudy = async (message: ChatMessage) => {
       role: "user",
       content: trimmed,
     };
+
+    // ✅ 내가 보낸 순간엔 따라가도록 ON
+    shouldAutoScrollRef.current = true;
 
     const newMessages = [...messages, userMessage];
     setMessages(newMessages);
@@ -870,18 +913,18 @@ const handleStartStudy = async (message: ChatMessage) => {
 
       // GPT 응답
       const chatRes = await fetch("/api/chat", {
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({
-    messages: newMessages,
-    isFirst: false,
-    sessionId: currentSessionId, // 로그인: 이걸로 DB에서 조회
-    // ✅ 게스트 폴백(있으면 사용, 없으면 백엔드 기본값)
-    language: selectedLanguage,
-    level: selectedLevel,
-    personaType: selectedPersona,
-  }),
-});
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: newMessages,
+          isFirst: false,
+          sessionId: currentSessionId, // 로그인: 이걸로 DB에서 조회
+          // ✅ 게스트 폴백(있으면 사용, 없으면 백엔드 기본값)
+          language: selectedLanguage,
+          level: selectedLevel,
+          personaType: selectedPersona,
+        }),
+      });
 
       const chatData = await chatRes.json().catch(() => null);
       const fullAssistantText = chatData?.reply ?? "응답을 가져오지 못했어요.";
@@ -938,6 +981,9 @@ const handleStartStudy = async (message: ChatMessage) => {
           content: "응답을 가져오는 데 문제가 생겼어. 잠시 후 다시 시도해 줘 🙏",
         },
       ]);
+
+      // ✅ 오류 메시지도 따라가도록 ON
+      shouldAutoScrollRef.current = true;
     } finally {
       setIsSending(false);
     }
@@ -1027,33 +1073,14 @@ const handleStartStudy = async (message: ChatMessage) => {
     if (wizardStep === 1) {
       return (
         <div>
-          <h3
-            style={{
-              fontSize: "18px",
-              color: "#f9fafb",
-              marginBottom: "12px",
-            }}
-          >
+          <h3 style={{ fontSize: "18px", color: "#f9fafb", marginBottom: "12px" }}>
             1단계. 대화할 언어를 선택해 주세요.
           </h3>
-          <p
-            style={{
-              fontSize: "13px",
-              color: "#9ca3af",
-              marginBottom: "10px",
-            }}
-          >
+          <p style={{ fontSize: "13px", color: "#9ca3af", marginBottom: "10px" }}>
             어떤 언어로 대화를 연습하고 싶나요?
           </p>
 
-          <div
-            style={{
-              display: "flex",
-              flexWrap: "wrap",
-              gap: "8px",
-              marginBottom: "16px",
-            }}
-          >
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", marginBottom: "16px" }}>
             {[
               { code: "en", label: "영어" },
               { code: "zh", label: "중국어" },
@@ -1066,22 +1093,14 @@ const handleStartStudy = async (message: ChatMessage) => {
               <button
                 key={lang.code}
                 onClick={() => setSelectedLanguage(lang.code)}
-                style={
-                  selectedLanguage === lang.code ? buttonSelectedStyle : buttonStyle
-                }
+                style={selectedLanguage === lang.code ? buttonSelectedStyle : buttonStyle}
               >
                 {lang.label}
               </button>
             ))}
           </div>
 
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "flex-end",
-              gap: "8px",
-            }}
-          >
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px" }}>
             <button
               onClick={() => setWizardStep(2)}
               disabled={!selectedLanguage}
@@ -1105,33 +1124,14 @@ const handleStartStudy = async (message: ChatMessage) => {
     if (wizardStep === 2) {
       return (
         <div>
-          <h3
-            style={{
-              fontSize: "18px",
-              color: "#f9fafb",
-              marginBottom: "12px",
-            }}
-          >
+          <h3 style={{ fontSize: "18px", color: "#f9fafb", marginBottom: "12px" }}>
             2단계. 나의 현재 수준을 선택해 주세요.
           </h3>
-          <p
-            style={{
-              fontSize: "13px",
-              color: "#9ca3af",
-              marginBottom: "10px",
-            }}
-          >
+          <p style={{ fontSize: "13px", color: "#9ca3af", marginBottom: "10px" }}>
             상대가 어느 정도 난이도로 말해주면 좋을까요?
           </p>
 
-          <div
-            style={{
-              display: "flex",
-              flexWrap: "wrap",
-              gap: "8px",
-              marginBottom: "16px",
-            }}
-          >
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", marginBottom: "16px" }}>
             {[
               { code: "beginner", label: "입문 (완전 처음)" },
               { code: "elementary", label: "초급 (기초 문장 조금)" },
@@ -1148,13 +1148,7 @@ const handleStartStudy = async (message: ChatMessage) => {
             ))}
           </div>
 
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              gap: "8px",
-            }}
-          >
+          <div style={{ display: "flex", justifyContent: "space-between", gap: "8px" }}>
             <button
               onClick={() => setWizardStep(1)}
               style={{
@@ -1192,54 +1186,19 @@ const handleStartStudy = async (message: ChatMessage) => {
     if (wizardStep === 3) {
       return (
         <div>
-          <h3
-            style={{
-              fontSize: "18px",
-              color: "#f9fafb",
-              marginBottom: "12px",
-            }}
-          >
+          <h3 style={{ fontSize: "18px", color: "#f9fafb", marginBottom: "12px" }}>
             3단계. 어떤 스타일의 대화 상대가 좋나요?
           </h3>
-          <p
-            style={{
-              fontSize: "13px",
-              color: "#9ca3af",
-              marginBottom: "10px",
-            }}
-          >
+          <p style={{ fontSize: "13px", color: "#9ca3af", marginBottom: "10px" }}>
             상대의 말투와 역할을 골라보세요.
           </p>
 
-          <div
-            style={{
-              display: "flex",
-              flexDirection: "column",
-              gap: "8px",
-              marginBottom: "16px",
-            }}
-          >
+          <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginBottom: "16px" }}>
             {[
-              {
-                code: "friend",
-                title: "친한 친구",
-                desc: "편하게 반말처럼 이야기해주는 친구",
-              },
-              {
-                code: "coworker",
-                title: "직장 동료",
-                desc: "업무·일상 이야기를 나누는 동료",
-              },
-              {
-                code: "teacher",
-                title: "엄격한 선생님",
-                desc: "틀린 표현을 바로잡아주는 선생님",
-              },
-              {
-                code: "traveler",
-                title: "여행 친구",
-                desc: "여행·문화 이야기를 좋아하는 친구",
-              },
+              { code: "friend", title: "친한 친구", desc: "편하게 반말처럼 이야기해주는 친구" },
+              { code: "coworker", title: "직장 동료", desc: "업무·일상 이야기를 나누는 동료" },
+              { code: "teacher", title: "엄격한 선생님", desc: "틀린 표현을 바로잡아주는 선생님" },
+              { code: "traveler", title: "여행 친구", desc: "여행·문화 이야기를 좋아하는 친구" },
             ].map((p) => (
               <button
                 key={p.code}
@@ -1267,25 +1226,12 @@ const handleStartStudy = async (message: ChatMessage) => {
                 }
               >
                 <span>{p.title}</span>
-                <span
-                  style={{
-                    fontSize: "11px",
-                    color: "#d1d5db",
-                  }}
-                >
-                  {p.desc}
-                </span>
+                <span style={{ fontSize: "11px", color: "#d1d5db" }}>{p.desc}</span>
               </button>
             ))}
           </div>
 
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              gap: "8px",
-            }}
-          >
+          <div style={{ display: "flex", justifyContent: "space-between", gap: "8px" }}>
             <button
               onClick={() => setWizardStep(2)}
               style={{
@@ -1323,22 +1269,10 @@ const handleStartStudy = async (message: ChatMessage) => {
     // 4단계 요약 + 시작
     return (
       <div>
-        <h3
-          style={{
-            fontSize: "18px",
-            color: "#f9fafb",
-            marginBottom: "12px",
-          }}
-        >
+        <h3 style={{ fontSize: "18px", color: "#f9fafb", marginBottom: "12px" }}>
           4단계. 이 설정으로 대화를 시작할까요?
         </h3>
-        <p
-          style={{
-            fontSize: "13px",
-            color: "#9ca3af",
-            marginBottom: "12px",
-          }}
-        >
+        <p style={{ fontSize: "13px", color: "#9ca3af", marginBottom: "12px" }}>
           아래 설정으로 첫 인사를 보낸 뒤, 자유롭게 대화를 이어갈 수 있어요.
         </p>
 
@@ -1364,13 +1298,7 @@ const handleStartStudy = async (message: ChatMessage) => {
           </div>
         </div>
 
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            gap: "8px",
-          }}
-        >
+        <div style={{ display: "flex", justifyContent: "space-between", gap: "8px" }}>
           <button
             onClick={() => setWizardStep(3)}
             style={{
@@ -1387,9 +1315,7 @@ const handleStartStudy = async (message: ChatMessage) => {
           </button>
           <button
             onClick={handleStartConfiguredConversation}
-            disabled={
-              !selectedLanguage || !selectedLevel || !selectedPersona || isCreatingConfiguredSession
-            }
+            disabled={!selectedLanguage || !selectedLevel || !selectedPersona || isCreatingConfiguredSession}
             style={{
               padding: "8px 16px",
               borderRadius: "999px",
@@ -1414,18 +1340,11 @@ const handleStartStudy = async (message: ChatMessage) => {
     );
   };
 
-  const wizardActive =
-    (chatFlow === "guestNew" || chatFlow === "newConfigured") && !hasStarted;
+  const wizardActive = (chatFlow === "guestNew" || chatFlow === "newConfigured") && !hasStarted;
 
   return (
     <>
-      <div
-        style={{
-          height: "100%",
-          display: "flex",
-          flexDirection: "column",
-        }}
-      >
+      <div style={{ height: "100%", display: "flex", flexDirection: "column" }}>
         {/* 상단 헤더 */}
         <div
           style={{
@@ -1455,15 +1374,7 @@ const handleStartStudy = async (message: ChatMessage) => {
             ← 홈으로
           </button>
 
-          <h2
-            style={{
-              fontSize: "20px",
-              textAlign: "center",
-              margin: 0,
-            }}
-          >
-            
-          </h2>
+          <h2 style={{ fontSize: "20px", textAlign: "center", margin: 0 }}></h2>
 
           <button
             onClick={handleDeleteCurrentSession}
@@ -1488,6 +1399,7 @@ const handleStartStudy = async (message: ChatMessage) => {
 
         {/* 메인 영역 */}
         <div
+          ref={scrollContainerRef}
           style={{
             flex: 1,
             overflowY: "auto",
@@ -1497,65 +1409,24 @@ const handleStartStudy = async (message: ChatMessage) => {
         >
           {/* 1) 전체 로딩 */}
           {isInitialLoading ? (
-            <div
-              style={{
-                width: "100%",
-                padding: "12px 0",
-                textAlign: "center",
-                fontSize: "14px",
-                color: "#9ca3af",
-              }}
-            >
+            <div style={{ width: "100%", padding: "12px 0", textAlign: "center", fontSize: "14px", color: "#9ca3af" }}>
               준비 중입니다...
             </div>
           ) : chatFlow === "invalid" ? (
-            <div
-              style={{
-                width: "100%",
-                padding: "12px 0",
-                textAlign: "center",
-                fontSize: "14px",
-                color: "#fca5a5",
-              }}
-            >
+            <div style={{ width: "100%", padding: "12px 0", textAlign: "center", fontSize: "14px", color: "#fca5a5" }}>
               잘못된 접근입니다. 메인 화면에서 다시 들어와 주세요.
             </div>
           ) : wizardActive ? (
-            // 2) 새 세션 설정 위저드
-            <div
-              style={{
-                padding: "8px 4px",
-              }}
-            >
-              {renderWizardStep()}
-            </div>
+            <div style={{ padding: "8px 4px" }}>{renderWizardStep()}</div>
           ) : chatFlow === "existingSession" && isMessagesLoading ? (
-            // 3) 기존 세션 메시지 로딩
-            <div
-              style={{
-                width: "100%",
-                padding: "12px 0",
-                textAlign: "center",
-                fontSize: "14px",
-                color: "#9ca3af",
-              }}
-            >
+            <div style={{ width: "100%", padding: "12px 0", textAlign: "center", fontSize: "14px", color: "#9ca3af" }}>
               대화 내역을 불러오는 중입니다...
             </div>
           ) : chatFlow === "existingSession" && messagesError ? (
-            <div
-              style={{
-                width: "100%",
-                padding: "12px 0",
-                textAlign: "center",
-                fontSize: "14px",
-                color: "#fca5a5",
-              }}
-            >
+            <div style={{ width: "100%", padding: "12px 0", textAlign: "center", fontSize: "14px", color: "#fca5a5" }}>
               {messagesError}
             </div>
           ) : (
-            // 4) 실제 메시지 목록
             <>
               {messages.map((msg) => {
                 const isUserMsg = msg.role === "user";
@@ -1593,9 +1464,7 @@ const handleStartStudy = async (message: ChatMessage) => {
                         {isUserMsg && (
                           <>
                             <button
-                              onClick={() =>
-                                toggleUserDetails(msg.id, msg.content, hasDetails)
-                              }
+                              onClick={() => toggleUserDetails(msg.id, msg.content, hasDetails)}
                               style={{
                                 fontSize: "14px",
                                 padding: "4px 8px",
@@ -1647,9 +1516,7 @@ const handleStartStudy = async (message: ChatMessage) => {
                         {isAssistant && (
                           <div style={{ display: "flex", gap: "4px" }}>
                             <button
-                              onClick={() =>
-                                toggleDetails(msg.id, msg.content, hasDetails)
-                              }
+                              onClick={() => toggleDetails(msg.id, msg.content, hasDetails)}
                               style={{
                                 fontSize: "14px",
                                 padding: "4px 8px",
@@ -1692,11 +1559,7 @@ const handleStartStudy = async (message: ChatMessage) => {
                                 color: "white",
                                 cursor: "pointer",
                               }}
-                              aria-label={
-                                playingMessageId === msg.id
-                                  ? "문장 정지"
-                                  : "문장 듣기"
-                              }
+                              aria-label={playingMessageId === msg.id ? "문장 정지" : "문장 듣기"}
                             >
                               {playingMessageId === msg.id ? "⏹️" : "▶️"}
                             </button>
@@ -1720,15 +1583,9 @@ const handleStartStudy = async (message: ChatMessage) => {
                             <div>상세 내용을 불러오는 중이에요… ⏳</div>
                           ) : msg.detailsError ? (
                             <div>
-                              <div style={{ marginBottom: "6px" }}>
-                                상세 정보를 불러오지 못했어요 🥲
-                              </div>
+                              <div style={{ marginBottom: "6px" }}>상세 정보를 불러오지 못했어요 🥲</div>
                               <button
-                                onClick={() =>
-                                  isUserMsg
-                                    ? loadUserDetails(msg.id, msg.content)
-                                    : loadDetails(msg.id, msg.content)
-                                }
+                                onClick={() => (isUserMsg ? loadUserDetails(msg.id, msg.content) : loadDetails(msg.id, msg.content))}
                                 style={{
                                   marginTop: "4px",
                                   fontSize: "13px",
@@ -1748,63 +1605,28 @@ const handleStartStudy = async (message: ChatMessage) => {
                               {isUserMsg && msg.details?.correction && (
                                 <div style={{ marginBottom: "6px" }}>
                                   <strong>0. 문장 교정</strong>
-                                  <div
-                                    style={{
-                                      marginTop: "2px",
-                                      whiteSpace: "pre-wrap",
-                                    }}
-                                  >
-                                    {msg.details.correction}
-                                  </div>
+                                  <div style={{ marginTop: "2px", whiteSpace: "pre-wrap" }}>{msg.details.correction}</div>
                                 </div>
                               )}
 
                               <div style={{ marginBottom: "6px" }}>
                                 <strong>1. 한글 번역</strong>
-                                <div
-                                  style={{
-                                    marginTop: "2px",
-                                    whiteSpace: "pre-wrap",
-                                  }}
-                                >
-                                  {msg.details?.ko}
-                                </div>
+                                <div style={{ marginTop: "2px", whiteSpace: "pre-wrap" }}>{msg.details?.ko}</div>
                               </div>
 
                               <div style={{ marginBottom: "6px" }}>
                                 <strong>2. 영어 번역</strong>
-                                <div
-                                  style={{
-                                    marginTop: "2px",
-                                    whiteSpace: "pre-wrap",
-                                  }}
-                                >
-                                  {msg.details?.en}
-                                </div>
+                                <div style={{ marginTop: "2px", whiteSpace: "pre-wrap" }}>{msg.details?.en}</div>
                               </div>
 
                               <div style={{ marginBottom: "6px" }}>
                                 <strong>3. 문법 설명</strong>
-                                <div
-                                  style={{
-                                    marginTop: "2px",
-                                    whiteSpace: "pre-wrap",
-                                  }}
-                                >
-                                  {msg.details?.grammar}
-                                </div>
+                                <div style={{ marginTop: "2px", whiteSpace: "pre-wrap" }}>{msg.details?.grammar}</div>
                               </div>
 
                               <div>
                                 <strong>4. 네이티브 TIP</strong>
-                                <div
-                                  style={{
-                                    marginTop: "2px",
-                                    whiteSpace: "pre-wrap",
-                                  }}
-                                >
-                                  {msg.details?.tip}
-                                </div>
+                                <div style={{ marginTop: "2px", whiteSpace: "pre-wrap" }}>{msg.details?.tip}</div>
                               </div>
                             </>
                           )}
@@ -1814,18 +1636,16 @@ const handleStartStudy = async (message: ChatMessage) => {
                   </div>
                 );
               })}
+
+              {/* ✅ 맨 아래 anchor */}
+              <div ref={bottomRef} />
             </>
           )}
         </div>
 
         {/* 아래 입력/버튼 영역 */}
         {!wizardActive && chatFlow !== "invalid" && (
-          <div
-            style={{
-              borderTop: "1px solid #333",
-              paddingTop: "8px",
-            }}
-          >
+          <div style={{ borderTop: "1px solid #333", paddingTop: "8px" }}>
             {hasStarted ? (
               <>
                 <textarea
@@ -1866,15 +1686,7 @@ const handleStartStudy = async (message: ChatMessage) => {
                 </button>
               </>
             ) : (
-              <div
-                style={{
-                  width: "100%",
-                  padding: "3px 0",
-                  textAlign: "center",
-                  fontSize: "14px",
-                  color: "#9ca3af",
-                }}
-              >
+              <div style={{ width: "100%", padding: "3px 0", textAlign: "center", fontSize: "14px", color: "#9ca3af" }}>
                 위에서 설정을 마치고 대화를 시작해 주세요.
               </div>
             )}
@@ -1889,9 +1701,7 @@ const handleStartStudy = async (message: ChatMessage) => {
                 whiteSpace: "pre-line",
               }}
             >
-              {
-                "⚠️ 민감한 개인정보는 입력하지 말아 주세요."
-              }
+              {"⚠️ 민감한 개인정보는 입력하지 말아 주세요."}
             </p>
           </div>
         )}
@@ -1936,22 +1746,8 @@ const handleStartStudy = async (message: ChatMessage) => {
               ×
             </button>
 
-            <h2
-              style={{
-                color: "#f9fafb",
-                fontSize: "18px",
-                marginBottom: "8px",
-              }}
-            >
-              로그인을 하고 더 사용해보세요
-            </h2>
-            <p
-              style={{
-                color: "#9ca3af",
-                fontSize: "14px",
-                marginBottom: "16px",
-              }}
-            >
+            <h2 style={{ color: "#f9fafb", fontSize: "18px", marginBottom: "8px" }}>로그인을 하고 더 사용해보세요</h2>
+            <p style={{ color: "#9ca3af", fontSize: "14px", marginBottom: "16px" }}>
               지금은 체험 모드라 대화를
               <br />
               최대 2회까지만 사용할 수 있어요.
@@ -2003,14 +1799,7 @@ type StudyModalProps = {
   canUseTTS: boolean;
 };
 
-function StudyModal({
-  isOpen,
-  onClose,
-  card,
-  sessionId,
-  messageId,
-  canUseTTS,
-}: StudyModalProps) {
+function StudyModal({ isOpen, onClose, card, sessionId, messageId, canUseTTS }: StudyModalProps) {
   const [answer, setAnswer] = useState("");
   const [feedback, setFeedback] = useState<{
     correct_answer: string;
@@ -2049,9 +1838,7 @@ function StudyModal({
     if (!trimmed) return;
 
     if (!card.cardId) {
-      alert(
-        "학습 카드 정보가 없어 피드백을 가져올 수 없어요.\n다시 학습 버튼을 눌러 준비해 주세요."
-      );
+      alert("학습 카드 정보가 없어 피드백을 가져올 수 없어요.\n다시 학습 버튼을 눌러 준비해 주세요.");
       return;
     }
 
@@ -2210,24 +1997,8 @@ function StudyModal({
         }}
       >
         {/* 헤더 */}
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            marginBottom: "12px",
-          }}
-        >
-          <h2
-            style={{
-              color: "#f9fafb",
-              fontSize: "18px",
-              fontWeight: 600,
-              margin: 0,
-            }}
-          >
-            학습 모드
-          </h2>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
+          <h2 style={{ color: "#f9fafb", fontSize: "18px", fontWeight: 600, margin: 0 }}>학습 모드</h2>
           <button
             onClick={onClose}
             style={{
@@ -2244,15 +2015,7 @@ function StudyModal({
 
         {/* 한국어 문장 + 힌트 */}
         <div style={{ marginBottom: "12px" }}>
-          <p
-            style={{
-              fontSize: "13px",
-              color: "#e5e7eb",
-              marginBottom: "4px",
-            }}
-          >
-            한국어 문장
-          </p>
+          <p style={{ fontSize: "13px", color: "#e5e7eb", marginBottom: "4px" }}>한국어 문장</p>
           <div
             style={{
               backgroundColor: "#1f2937",
@@ -2265,17 +2028,10 @@ function StudyModal({
           >
             {card.korean}
           </div>
-          
         </div>
 
         {/* 스페인어 TTS 버튼 */}
-        <div
-          style={{
-            marginBottom: "12px",
-            display: "flex",
-            justifyContent: "flex-end",
-          }}
-        >
+        <div style={{ marginBottom: "12px", display: "flex", justifyContent: "flex-end" }}>
           <button
             onClick={handlePlayTTS}
             style={{
@@ -2297,15 +2053,7 @@ function StudyModal({
 
         {/* 내가 적는 문장 */}
         <div style={{ marginBottom: "12px" }}>
-          <p
-            style={{
-              fontSize: "13px",
-              color: "#e5e7eb",
-              marginBottom: "4px",
-            }}
-          >
-            배운 언어로 다시 써보기
-          </p>
+          <p style={{ fontSize: "13px", color: "#e5e7eb", marginBottom: "4px" }}>배운 언어로 다시 써보기</p>
           <textarea
             value={answer}
             onChange={(e) => setAnswer(e.target.value)}
@@ -2339,34 +2087,21 @@ function StudyModal({
             }}
           >
             <div style={{ marginBottom: "6px" }}>
-  <strong>정답 예시: </strong>
-  <span style={{ whiteSpace: "pre-wrap" }}>{card.baseSpanish}</span>
-</div>
+              <strong>정답 예시: </strong>
+              <span style={{ whiteSpace: "pre-wrap" }}>{card.baseSpanish}</span>
+            </div>
             <div style={{ marginBottom: "4px" }}>
               <strong>TIP: </strong>
               <span>{feedback.tip}</span>
             </div>
-            <div
-              style={{
-                marginTop: "4px",
-                fontSize: "11px",
-                color: "#9ca3af",
-              }}
-            >
-              채점 결과:{" "}
-              {feedback.is_correct ? "거의 정답이에요! 👏" : "조금 더 연습해보자 🙂"}
+            <div style={{ marginTop: "4px", fontSize: "11px", color: "#9ca3af" }}>
+              채점 결과: {feedback.is_correct ? "거의 정답이에요! 👏" : "조금 더 연습해보자 🙂"}
             </div>
           </div>
         )}
 
         {/* 버튼들 */}
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            marginTop: "4px",
-          }}
-        >
+        <div style={{ display: "flex", justifyContent: "space-between", marginTop: "4px" }}>
           <button
             onClick={handleRetry}
             style={{
@@ -2393,8 +2128,7 @@ function StudyModal({
               fontWeight: 500,
               backgroundColor: isSubmitting ? "#4b5563" : "#2563eb",
               color: "#f9fafb",
-              cursor:
-                isSubmitting || !answer.trim() ? "not-allowed" : "pointer",
+              cursor: isSubmitting || !answer.trim() ? "not-allowed" : "pointer",
               opacity: isSubmitting || !answer.trim() ? 0.7 : 1,
             }}
           >
