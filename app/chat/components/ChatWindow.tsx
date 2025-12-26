@@ -54,6 +54,16 @@ export default function ChatWindow() {
   const [playingMessageId, setPlayingMessageId] = useState<string | null>(null);
   const currentAudioRef = useRef<HTMLAudioElement | null>(null);
 
+  // ✅ 프로필(TTS 권한) 관련
+  const [ttsEnabled, setTtsEnabled] = useState<boolean>(false);
+  const [isProfileLoading, setIsProfileLoading] = useState<boolean>(false);
+
+  // ✅ 출시요청 모달
+  const [showLaunchRequestModal, setShowLaunchRequestModal] = useState(false);
+  const [launchConsent, setLaunchConsent] = useState(false);
+  const [isLaunchRequesting, setIsLaunchRequesting] = useState(false);
+  const [launchRequestedDone, setLaunchRequestedDone] = useState(false);
+
   const typingSpeed = 20;
   const makeId = () => `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
@@ -167,6 +177,9 @@ export default function ChatWindow() {
           setMessages([]);
           setHasStarted(false);
 
+          // 프로필/권한
+          setTtsEnabled(false);
+
           // ✅ 새 시작은 auto-scroll ON
           shouldAutoScrollRef.current = true;
           return;
@@ -222,6 +235,52 @@ export default function ChatWindow() {
       audioCacheRef.current.clear();
     };
   }, [searchParams]);
+
+  /**
+   * ✅ 로그인 사용자면 /api/profile 로드해서 ttsEnabled 반영
+   */
+  useEffect(() => {
+    const loadProfile = async () => {
+      if (isGuest) {
+        setTtsEnabled(false);
+        return;
+      }
+      if (!user) return;
+
+      setIsProfileLoading(true);
+      try {
+        const accessToken = await getAccessToken();
+        if (!accessToken) {
+          setTtsEnabled(false);
+          return;
+        }
+
+        const res = await fetch("/api/profile", {
+          method: "GET",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+          },
+        });
+
+        const data = await res.json().catch(() => null);
+        if (!res.ok || !data) {
+          console.error("/api/profile load failed:", data);
+          setTtsEnabled(false);
+          return;
+        }
+
+        const enabled = Boolean(data.ttsEnabled ?? data?.profile?.tts_enabled ?? false);
+        setTtsEnabled(enabled);
+      } catch (e) {
+        console.error("loadProfile error:", e);
+        setTtsEnabled(false);
+      } finally {
+        setIsProfileLoading(false);
+      }
+    };
+
+    loadProfile();
+  }, [user, isGuest]);
 
   /**
    * ✅ 기존 세션 이어가기 모드: /api/session/messages 로 메시지 로드
@@ -430,6 +489,14 @@ export default function ChatWindow() {
         return;
       }
 
+      // ✅ 권한 없으면 출시요청 모달
+      if (!ttsEnabled) {
+        setLaunchRequestedDone(false);
+        setLaunchConsent(false);
+        setShowLaunchRequestModal(true);
+        return;
+      }
+
       if (playingMessageId === message.id && currentAudioRef.current) {
         currentAudioRef.current.pause();
         currentAudioRef.current.currentTime = 0;
@@ -470,16 +537,37 @@ export default function ChatWindow() {
 
       const audioId = `${sessionId}/${message.id}`;
 
+      const accessToken = await getAccessToken();
+      if (!accessToken) {
+        alert("로그인이 필요해요 🙂");
+        return;
+      }
+
       setPlayingMessageId(message.id);
 
       const res = await fetch("/api/tts", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`,
+        },
         body: JSON.stringify({
           text: message.content,
           audioId,
         }),
       });
+
+      // ✅ 권한/플랜 막힘이면 출시요청으로 유도
+      if (res.status === 401 || res.status === 403) {
+        const data = await res.json().catch(() => null);
+        console.warn("TTS blocked:", data);
+        setPlayingMessageId(null);
+
+        setLaunchRequestedDone(false);
+        setLaunchConsent(false);
+        setShowLaunchRequestModal(true);
+        return;
+      }
 
       if (!res.ok) {
         const data = await res.json().catch(() => null);
@@ -1548,21 +1636,46 @@ export default function ChatWindow() {
                               📘
                             </button>
 
-                            <button
-                              onClick={() => handlePlayTTS(msg)}
-                              style={{
-                                fontSize: "16px",
-                                padding: "4px 8px",
-                                borderRadius: "999px",
-                                border: "1px solid #555",
-                                backgroundColor: "#111",
-                                color: "white",
-                                cursor: "pointer",
-                              }}
-                              aria-label={playingMessageId === msg.id ? "문장 정지" : "문장 듣기"}
-                            >
-                              {playingMessageId === msg.id ? "⏹️" : "▶️"}
-                            </button>
+                            {!isGuest && !ttsEnabled ? (
+                              <button
+                                onClick={() => {
+                                  setLaunchRequestedDone(false);
+                                  setLaunchConsent(false);
+                                  setShowLaunchRequestModal(true);
+                                }}
+                                style={{
+                                  fontSize: "12px",
+                                  padding: "4px 10px",
+                                  borderRadius: "999px",
+                                  border: "1px solid #555",
+                                  backgroundColor: "#111",
+                                  color: "white",
+                                  cursor: "pointer",
+                                  whiteSpace: "nowrap",
+                                }}
+                                aria-label="TTS 출시요청"
+                              >
+                                ▶️
+                              </button>
+                            ) : (
+                              <button
+                                onClick={() => handlePlayTTS(msg)}
+                                style={{
+                                  fontSize: "16px",
+                                  padding: "4px 8px",
+                                  borderRadius: "999px",
+                                  border: "1px solid #555",
+                                  backgroundColor: "#111",
+                                  color: "white",
+                                  cursor: "pointer",
+                                  opacity: isProfileLoading ? 0.6 : 1,
+                                }}
+                                disabled={isProfileLoading}
+                                aria-label={playingMessageId === msg.id ? "문장 정지" : "문장 듣기"}
+                              >
+                                {playingMessageId === msg.id ? "⏹️" : "▶️"}
+                              </button>
+                            )}
                           </div>
                         )}
                       </div>
@@ -1585,7 +1698,9 @@ export default function ChatWindow() {
                             <div>
                               <div style={{ marginBottom: "6px" }}>상세 정보를 불러오지 못했어요 🥲</div>
                               <button
-                                onClick={() => (isUserMsg ? loadUserDetails(msg.id, msg.content) : loadDetails(msg.id, msg.content))}
+                                onClick={() =>
+                                  isUserMsg ? loadUserDetails(msg.id, msg.content) : loadDetails(msg.id, msg.content)
+                                }
                                 style={{
                                   marginTop: "4px",
                                   fontSize: "13px",
@@ -1775,6 +1890,129 @@ export default function ChatWindow() {
         </div>
       )}
 
+      {/* 🔔 TTS 출시요청 모달 */}
+      {showLaunchRequestModal && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            backgroundColor: "rgba(0,0,0,0.7)",
+            display: "flex",
+            justifyContent: "center",
+            alignItems: "center",
+            zIndex: 55,
+          }}
+        >
+          <div
+            style={{
+              backgroundColor: "#111827",
+              padding: "22px 24px",
+              borderRadius: "16px",
+              width: "340px",
+              boxShadow: "0 10px 30px rgba(0,0,0,0.5)",
+              position: "relative",
+            }}
+          >
+            <button
+              onClick={() => setShowLaunchRequestModal(false)}
+              style={{
+                position: "absolute",
+                top: "8px",
+                right: "8px",
+                border: "none",
+                background: "transparent",
+                color: "#9ca3af",
+                fontSize: "18px",
+                cursor: "pointer",
+              }}
+            >
+              ×
+            </button>
+
+            <h2 style={{ color: "#f9fafb", fontSize: "16px", marginBottom: "8px" }}>음성 기능</h2>
+            <p style={{ color: "#9ca3af", fontSize: "13px", marginBottom: "12px", lineHeight: 1.5 }}>
+              음성 기능 도입을 검토중입니다.
+              <br />
+              도입을 원하시면 버튼을 눌러주세요.
+            </p>
+
+            <label style={{ display: "flex", gap: "8px", alignItems: "flex-start", marginBottom: "14px" }}>
+              <input
+                type="checkbox"
+                checked={launchConsent}
+                onChange={(e) => setLaunchConsent(e.target.checked)}
+                style={{ marginTop: "2px" }}
+              />
+              <span style={{ color: "#e5e7eb", fontSize: "12px", lineHeight: 1.4 }}>
+                이메일 수집에 동의합니다.
+                <br />
+                <span style={{ color: "#9ca3af" }}>수요 확인 목적으로 사용된 후 지체없이 파기됩니다.</span>
+              </span>
+            </label>
+
+            {launchRequestedDone ? (
+              <div style={{ color: "#86efac", fontSize: "13px", marginBottom: "12px" }}>참여해주셔서 감사합니다.</div>
+            ) : null}
+
+            <button
+              onClick={async () => {
+                try {
+                  if (!launchConsent) {
+                    alert("이메일 수집 동의에 체크해 주세요");
+                    return;
+                  }
+                  const accessToken = await getAccessToken();
+                  if (!accessToken) {
+                    alert("로그인이 필요해요 🙂");
+                    return;
+                  }
+
+                  setIsLaunchRequesting(true);
+
+                  const res = await fetch("/api/launch-request", {
+                    method: "POST",
+                    headers: {
+                      "Content-Type": "application/json",
+                      Authorization: `Bearer ${accessToken}`,
+                    },
+                    body: JSON.stringify({ feature: "tts", consent: true }),
+                  });
+
+                  const data = await res.json().catch(() => null);
+                  if (!res.ok || !data?.ok) {
+                    console.error("launch-request failed:", data);
+                    alert("요청 저장에 실패했어요 🥲");
+                    return;
+                  }
+
+                  setLaunchRequestedDone(true);
+                } catch (e) {
+                  console.error("launch-request error:", e);
+                  alert("요청 저장 중 오류가 발생했어요 🥲");
+                } finally {
+                  setIsLaunchRequesting(false);
+                }
+              }}
+              disabled={isLaunchRequesting}
+              style={{
+                width: "100%",
+                padding: "10px 14px",
+                borderRadius: "999px",
+                border: "none",
+                cursor: isLaunchRequesting ? "not-allowed" : "pointer",
+                fontSize: "13px",
+                fontWeight: 600,
+                backgroundColor: launchConsent ? "#2563eb" : "#4b5563",
+                color: "#f9fafb",
+                opacity: isLaunchRequesting ? 0.8 : 1,
+              }}
+            >
+              {isLaunchRequesting ? "저장 중..." : "도입요청"}
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* 📚 학습 모달 */}
       <StudyModal
         isOpen={isStudyModalOpen}
@@ -1784,7 +2022,7 @@ export default function ChatWindow() {
         card={activeStudyCard}
         sessionId={sessionId}
         messageId={activeStudyMessageId}
-        canUseTTS={!isGuest}
+        canUseTTS={!isGuest && ttsEnabled}
       />
     </>
   );
@@ -1884,7 +2122,7 @@ function StudyModal({ isOpen, onClose, card, sessionId, messageId, canUseTTS }: 
   // 🔊 학습 모달 안 TTS
   const handlePlayTTS = async () => {
     if (!canUseTTS) {
-      alert("TTS는 로그인 후 사용할 수 있어요 🙂");
+      alert("음성 기능은 현재 플랜에서 사용할 수 없어요 🙂");
       return;
     }
 
@@ -1933,9 +2171,15 @@ function StudyModal({ isOpen, onClose, card, sessionId, messageId, canUseTTS }: 
         return;
       }
 
+      const { data: sess } = await supabase.auth.getSession();
+      const accessToken = sess.session?.access_token ?? null;
+
       const res = await fetch("/api/tts", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+        },
         body: JSON.stringify({
           text: card.baseSpanish,
           audioId,
