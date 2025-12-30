@@ -6,6 +6,10 @@ const client = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY!,
 });
 
+const TERMS_VERSION = "2025-12-30";
+const PRIVACY_VERSION = "2025-12-30";
+const COLLECTION_VERSION = "2025-12-30";
+
 function languageName(code: string) {
   switch (code) {
     case "en":
@@ -80,8 +84,58 @@ async function getSessionConfig(sessionId?: string | null) {
   };
 }
 
+async function assertConsentIfLoggedIn(req: NextRequest) {
+  const auth = req.headers.get("authorization") ?? "";
+  const m = auth.match(/^Bearer\s+(.+)$/i);
+  const token = m?.[1];
+
+  // ✅ 토큰 없으면 게스트 호출로 보고 패스
+  if (!token) return { ok: true as const, userId: null as string | null };
+
+  // ✅ 토큰 있으면 로그인 유저로 간주 -> user 확인
+  const { data, error } = await supabaseServer.auth.getUser(token);
+  if (error || !data?.user) {
+    return { ok: false as const, status: 401, code: "UNAUTHORIZED" as const };
+  }
+
+  const userId = data.user.id;
+
+  // ✅ 동의 레코드 확인
+  const { data: consent, error: consentErr } = await supabaseServer
+    .from("user_consents")
+    .select("terms_version, privacy_version, collection_version")
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (consentErr) {
+    console.error("Consent check error(/api/chat):", consentErr);
+    return { ok: false as const, status: 500, code: "CONSENT_CHECK_FAILED" as const };
+  }
+
+  const isAccepted =
+    !!consent &&
+    consent.terms_version === TERMS_VERSION &&
+    consent.privacy_version === PRIVACY_VERSION &&
+    consent.collection_version === COLLECTION_VERSION;
+
+  if (!isAccepted) {
+    return { ok: false as const, status: 403, code: "CONSENT_REQUIRED" as const };
+  }
+
+  return { ok: true as const, userId };
+}
+
 export async function POST(req: NextRequest) {
   try {
+    // ✅ 0) 로그인 유저면 동의 필수
+    const consentRes = await assertConsentIfLoggedIn(req);
+    if (!consentRes.ok) {
+      return NextResponse.json(
+        { ok: false, error: consentRes.code },
+        { status: consentRes.status }
+      );
+    }
+
     const body = await req.json().catch(() => ({}));
     const {
       messages,
@@ -106,7 +160,7 @@ export async function POST(req: NextRequest) {
     const level = cfg?.level ?? bodyLevel ?? "beginner";
     const personaType = cfg?.personaType ?? bodyPersonaType ?? "friend";
 
-const systemPrompt = `
+    const systemPrompt = `
 You are a conversation partner for practicing ${languageName(language)}.
 User level: ${level}. Persona: ${personaType} (${personaGuide(personaType)}).
 
@@ -187,11 +241,11 @@ ${levelGuide(level)}
       completion.choices[0]?.message?.content?.trim() ??
       "Lo siento, ¿puedes repetirlo?";
 
-    return NextResponse.json({ reply });
+    return NextResponse.json({ ok: true, reply });
   } catch (error) {
     console.error("❌ /api/chat error:", error);
     return NextResponse.json(
-      { reply: "서버에서 오류가 발생했어. 잠시 후 다시 시도해 줘!" },
+      { ok: false, reply: "서버에서 오류가 발생했어. 잠시 후 다시 시도해 줘!" },
       { status: 500 }
     );
   }
