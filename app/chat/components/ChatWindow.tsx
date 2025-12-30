@@ -64,6 +64,9 @@ export default function ChatWindow() {
   const [isLaunchRequesting, setIsLaunchRequesting] = useState(false);
   const [launchRequestedDone, setLaunchRequestedDone] = useState(false);
 
+  // ✅ (추가) 개인정보 안내 전문보기 모달
+  const [showPrivacyNoticeModal, setShowPrivacyNoticeModal] = useState(false);
+
   const typingSpeed = 20;
   const makeId = () => `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
@@ -833,9 +836,6 @@ export default function ChatWindow() {
    * ✅ 4단계 설정 완료 후 "대화 시작하기"
    *  - /api/session/create-configured 호출(로그인)
    *  - 게스트: isGuest:true로 보내 DB 저장 없이 인사만 받아오기(백엔드에서 처리)
-   *
-   *  예상 응답(제안):
-   *   { ok: true, sessionId?: string, greeting: string }
    */
   const handleStartConfiguredConversation = async () => {
     if (!selectedLanguage || !selectedLevel || !selectedPersona) {
@@ -1914,7 +1914,10 @@ export default function ChatWindow() {
             }}
           >
             <button
-              onClick={() => setShowLaunchRequestModal(false)}
+              onClick={() => {
+                setShowLaunchRequestModal(false);
+                setShowPrivacyNoticeModal(false);
+              }}
               style={{
                 position: "absolute",
                 top: "8px",
@@ -1936,7 +1939,7 @@ export default function ChatWindow() {
               도입을 원하시면 버튼을 눌러주세요.
             </p>
 
-            <label style={{ display: "flex", gap: "8px", alignItems: "flex-start", marginBottom: "14px" }}>
+            <label style={{ display: "flex", gap: "8px", alignItems: "flex-start", marginBottom: "8px" }}>
               <input
                 type="checkbox"
                 checked={launchConsent}
@@ -1949,6 +1952,24 @@ export default function ChatWindow() {
                 <span style={{ color: "#9ca3af" }}>수요 확인 목적으로 사용된 후 지체없이 파기됩니다.</span>
               </span>
             </label>
+
+            {/* ✅ (추가) 전문보기 버튼 */}
+            <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "14px" }}>
+              <button
+                type="button"
+                onClick={() => setShowPrivacyNoticeModal(true)}
+                style={{
+                  border: "none",
+                  background: "transparent",
+                  color: "#93c5fd",
+                  fontSize: "12px",
+                  cursor: "pointer",
+                  padding: "2px 4px",
+                }}
+              >
+                [전문보기]
+              </button>
+            </div>
 
             {launchRequestedDone ? (
               <div style={{ color: "#86efac", fontSize: "13px", marginBottom: "12px" }}>참여해주셔서 감사합니다.</div>
@@ -2008,6 +2029,107 @@ export default function ChatWindow() {
               }}
             >
               {isLaunchRequesting ? "저장 중..." : "도입요청"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ✅ 개인정보 수집 및 이용 안내 (전문보기 모달) */}
+      {showPrivacyNoticeModal && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            backgroundColor: "rgba(0,0,0,0.7)",
+            display: "flex",
+            justifyContent: "center",
+            alignItems: "center",
+            zIndex: 56,
+          }}
+          onClick={() => setShowPrivacyNoticeModal(false)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              backgroundColor: "#0b1220",
+              padding: "18px 18px",
+              borderRadius: "16px",
+              width: "360px",
+              maxWidth: "92vw",
+              boxShadow: "0 10px 30px rgba(0,0,0,0.55)",
+              border: "1px solid #1f2937",
+              position: "relative",
+            }}
+          >
+            <button
+              onClick={() => setShowPrivacyNoticeModal(false)}
+              style={{
+                position: "absolute",
+                top: "8px",
+                right: "10px",
+                border: "none",
+                background: "transparent",
+                color: "#9ca3af",
+                fontSize: "18px",
+                cursor: "pointer",
+              }}
+              aria-label="닫기"
+            >
+              ×
+            </button>
+
+            <h3 style={{ margin: 0, marginBottom: "10px", color: "#f9fafb", fontSize: "15px" }}>
+              개인정보 수집 및 이용 안내
+            </h3>
+
+            <div style={{ color: "#e5e7eb", fontSize: "12px", lineHeight: 1.6 }}>
+              <div style={{ marginBottom: "10px" }}>
+                <strong>1. 수집 목적</strong>
+                <div style={{ marginTop: "2px", color: "#cbd5e1" }}>음성 기능(TTS) 출시 수요 확인 및 출시 시 안내</div>
+              </div>
+
+              <div style={{ marginBottom: "10px" }}>
+                <strong>2. 수집 항목</strong>
+                <div style={{ marginTop: "2px", color: "#cbd5e1" }}>이메일 주소</div>
+              </div>
+
+              <div style={{ marginBottom: "10px" }}>
+                <strong>3. 보유 및 이용 기간</strong>
+                <div style={{ marginTop: "2px", color: "#cbd5e1" }}>
+                  음성 기능 출시 시 즉시 파기
+                </div>
+              </div>
+
+              <div style={{ marginBottom: "10px" }}>
+                <strong>4. 동의 거부 권리 안내</strong>
+                <div style={{ marginTop: "2px", color: "#cbd5e1" }}>
+                  이용자는 개인정보 수집에 동의하지 않을 권리가 있으며,
+                  <br />
+                  동의하지 않아도 서비스 이용에는 제한이 없습니다.
+                </div>
+              </div>
+
+              <div>
+                <strong>5. 처리 주체</strong>
+                <div style={{ marginTop: "2px", color: "#cbd5e1" }}>본 서비스 운영자</div>
+              </div>
+            </div>
+
+            <button
+              onClick={() => setShowPrivacyNoticeModal(false)}
+              style={{
+                marginTop: "14px",
+                width: "100%",
+                padding: "10px 12px",
+                borderRadius: "999px",
+                border: "1px solid #374151",
+                backgroundColor: "#111827",
+                color: "#e5e7eb",
+                fontSize: "13px",
+                cursor: "pointer",
+              }}
+            >
+              닫기
             </button>
           </div>
         </div>
