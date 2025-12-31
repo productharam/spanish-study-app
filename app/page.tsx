@@ -38,6 +38,9 @@ export default function Home() {
   // ✅ 화면 폭에 따라 가로/세로 배치 전환
   const [isNarrow, setIsNarrow] = useState(false);
 
+  // ✅ "일정 수준 이상"이면 (PC) = 좌측 타이틀 + 우측 로그인, 중앙 버튼 구조
+  const [isWide, setIsWide] = useState(false);
+
   // ✅ 설정 모달
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
@@ -50,7 +53,12 @@ export default function Home() {
   const [deleteAccountError, setDeleteAccountError] = useState<string | null>(null);
 
   useEffect(() => {
-    const handleResize = () => setIsNarrow(window.innerWidth < 900);
+    const handleResize = () => {
+      setIsNarrow(window.innerWidth < 900);
+      // ✅ PC 레이아웃 전환 기준 (원하는대로 1100/1200 등 조절 가능)
+      setIsWide(window.innerWidth >= 1100);
+    };
+
     handleResize();
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
@@ -289,7 +297,6 @@ export default function Home() {
     }
   };
 
-  // ✅ 푸터 문의 메일 (원하면 여기만 바꿔서 사용)
   const contactEmail = "product.haram@gmail.com";
 
   return (
@@ -303,91 +310,183 @@ export default function Home() {
     >
       <main
         style={{
-          flex: 1, // ✅ 푸터를 항상 하단에 두기 위한 핵심
+          flex: 1,
           display: "flex",
           justifyContent: "center",
           alignItems: "center",
-          // ✅ 작은 화면에서 상단이 붙어보이는 현상 해결(위 padding 증가)
-          padding: isNarrow ? "36px 16px 16px" : "16px",
+          padding: isNarrow ? "36px 16px 16px" : isWide ? "90px 16px 16px" : "16px",
           boxSizing: "border-box",
         }}
       >
-        {/* ✅ 비로그인 상태: Hero를 화면 정중앙에 */}
+        {/* ✅ 비로그인 상태 */}
         {!isUserLoading && !user ? (
-          <div
-            style={{
-              width: "100%",
-              maxWidth: "960px",
-              display: "flex",
-              flexDirection: "column",
-              alignItems: "center",
-              justifyContent: "center",
-              textAlign: "center",
-              gap: "18px",
-              padding: "8px 0",
-            }}
-          >
-            <div>
-              <h1 style={{ color: "#f9fafb", fontSize: "24px", margin: "0 0 6px 0" }}>
-                말하면서 배우는 언어 챗봇
-              </h1>
-              <p style={{ color: "#9ca3af", fontSize: "13px", margin: 0, lineHeight: 1.6 }}>
-                실제 말하는 것처럼 대화하고,
-                <br />
-                모르는 문장을 반복 학습할 수 있어요
-              </p>
-            </div>
-
-            <p style={{ color: "#9ca3af", fontSize: "14px", margin: 0, lineHeight: 1.7 }}>
-              로그인 없이 가볍게 체험하거나,
-              <br />
-              로그인 후 대화 기록을 저장할 수 있어요.
-            </p>
-
+          // ✅ PC(일정 폭 이상): "좌측 타이틀 + 우측 로그인" / "중앙 버튼" 구조 (스크린샷처럼)
+          isWide ? (
             <div
               style={{
-                display: "flex",
-                gap: "12px",
-                flexWrap: "wrap",
-                justifyContent: "center",
+                width: "100%",
+                maxWidth: "1100px",
+                minHeight: "18vh",
+                display: "grid",
+                gridTemplateColumns: "1fr 1fr",
+                gridTemplateRows: "auto 1fr",
+                columnGap: "24px",
+                rowGap: "12px",
+                alignItems: "start",
               }}
             >
-              <button
-                onClick={() => router.push("/chat?mode=guest")}
-                style={{
-                  padding: "14px 28px",
-                  fontSize: "16px",
-                  borderRadius: "12px",
-                  border: "none",
-                  cursor: "pointer",
-                  boxShadow: "0 4px 10px rgba(0,0,0,0.3)",
-                  backgroundColor: "#22c55e",
-                  color: "#ffffff",
-                  minWidth: "200px",
-                }}
-              >
-                대화 체험하기
-              </button>
+              {/* 좌측 타이틀 블럭 */}
+              <div style={{ gridColumn: "1 / 2", gridRow: "1 / 2" }}>
+                <h1 style={{ color: "#f9fafb", fontSize: "24px", margin: "0 0 6px 0" }}>
+                  말하면서 배우는 언어 챗봇
+                </h1>
+                <p style={{ color: "#9ca3af", fontSize: "13px", margin: 0, lineHeight: 1.6 }}>
+                  실제 말하는 것처럼 대화하고,
+                  <br />
+                  모르는 문장을 반복 학습할 수 있어요
+                </p>
+              </div>
 
-              <button
-                onClick={() => router.push("/login")}
+              {/* 중앙(두 컬럼 spanning): 안내문 + 버튼 2개 */}
+              <div
                 style={{
-                  padding: "12px 24px",
-                  fontSize: "15px",
-                  borderRadius: "999px",
-                  border: "1px solid #4b5563",
-                  cursor: "pointer",
-                  backgroundColor: "transparent",
-                  color: "#e5e7eb",
-                  minWidth: "200px",
+                  gridColumn: "1 / 3",
+                  gridRow: "2 / 3",
+                  display: "flex",
+                  flexDirection: "column",
+                  justifyContent: "center",
+                  alignItems: "center",
+                  textAlign: "center",
+                  gap: "14px",
+                  paddingBottom: "24px",
                 }}
               >
-                로그인 후 사용하기
-              </button>
+                <p style={{ color: "#9ca3af", fontSize: "14px", margin: 0, lineHeight: 1.7 }}>
+                  로그인 없이 가볍게 체험하거나,
+                  <br />
+                  로그인 후 대화 기록을 저장할 수 있어요.
+                </p>
+
+                <div
+                  style={{
+                    display: "flex",
+                    gap: "12px",
+                    flexWrap: "wrap",
+                    justifyContent: "center",
+                  }}
+                >
+                  <button
+                    onClick={() => router.push("/chat?mode=guest")}
+                    style={{
+                      padding: "14px 28px",
+                      fontSize: "16px",
+                      borderRadius: "12px",
+                      border: "none",
+                      cursor: "pointer",
+                      boxShadow: "0 4px 10px rgba(0,0,0,0.3)",
+                      backgroundColor: "#22c55e",
+                      color: "#ffffff",
+                      minWidth: "200px",
+                    }}
+                  >
+                    대화 체험하기
+                  </button>
+
+                  <button
+                    onClick={() => router.push("/login")}
+                    style={{
+                      padding: "12px 24px",
+                      fontSize: "15px",
+                      borderRadius: "999px",
+                      border: "1px solid #4b5563",
+                      cursor: "pointer",
+                      backgroundColor: "transparent",
+                      color: "#e5e7eb",
+                      minWidth: "200px",
+                    }}
+                  >
+                    로그인 후 사용하기
+                  </button>
+                </div>
+              </div>
             </div>
-          </div>
+          ) : (
+            // ✅ 모바일/좁은 화면: 기존처럼 중앙정렬 (문구/내용 그대로)
+            <div
+              style={{
+                width: "100%",
+                maxWidth: "960px",
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                justifyContent: "center",
+                textAlign: "center",
+                gap: "18px",
+                padding: "8px 0",
+              }}
+            >
+              <div>
+                <h1 style={{ color: "#f9fafb", fontSize: "24px", margin: "0 0 6px 0" }}>
+                  말하면서 배우는 언어 챗봇
+                </h1>
+                <p style={{ color: "#9ca3af", fontSize: "13px", margin: 0, lineHeight: 1.6 }}>
+                  실제 말하는 것처럼 대화하고,
+                  <br />
+                  모르는 문장을 반복 학습할 수 있어요
+                </p>
+              </div>
+
+              <p style={{ color: "#9ca3af", fontSize: "14px", margin: 0, lineHeight: 1.7 }}>
+                로그인 없이 가볍게 체험하거나,
+                <br />
+                로그인 후 대화 기록을 저장할 수 있어요.
+              </p>
+
+              <div
+                style={{
+                  display: "flex",
+                  gap: "12px",
+                  flexWrap: "wrap",
+                  justifyContent: "center",
+                }}
+              >
+                <button
+                  onClick={() => router.push("/chat?mode=guest")}
+                  style={{
+                    padding: "14px 28px",
+                    fontSize: "16px",
+                    borderRadius: "12px",
+                    border: "none",
+                    cursor: "pointer",
+                    boxShadow: "0 4px 10px rgba(0,0,0,0.3)",
+                    backgroundColor: "#22c55e",
+                    color: "#ffffff",
+                    minWidth: "200px",
+                  }}
+                >
+                  대화 체험하기
+                </button>
+
+                <button
+                  onClick={() => router.push("/login")}
+                  style={{
+                    padding: "12px 24px",
+                    fontSize: "15px",
+                    borderRadius: "999px",
+                    border: "1px solid #4b5563",
+                    cursor: "pointer",
+                    backgroundColor: "transparent",
+                    color: "#e5e7eb",
+                    minWidth: "200px",
+                  }}
+                >
+                  로그인 후 사용하기
+                </button>
+              </div>
+            </div>
+          )
         ) : (
-          // ✅ 로그인 상태(또는 로딩 중): 기존 레이아웃
+          // ✅ 로그인 상태(또는 로딩 중): 기존 레이아웃 유지
           <div
             style={{
               width: "100%",
@@ -831,8 +930,7 @@ export default function Home() {
                           border: "1px solid #7f1d1d",
                           backgroundColor: "#991b1b",
                           color: "#fff",
-                          cursor:
-                            !deleteChecked || isDeletingAccount ? "not-allowed" : "pointer",
+                          cursor: !deleteChecked || isDeletingAccount ? "not-allowed" : "pointer",
                           opacity: !deleteChecked || isDeletingAccount ? 0.55 : 1,
                           fontSize: "14px",
                           fontWeight: 700,
