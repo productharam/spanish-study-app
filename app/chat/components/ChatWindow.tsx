@@ -14,7 +14,8 @@ type MessageDetails = {
 };
 
 type ChatMessage = {
-  id: string;
+  id: string; // 프론트 임시 id (UI용)
+  dbId?: string; // ✅ DB chat_messages.id (캐시 키/tts 키용)
   role: "user" | "assistant";
   content: string;
   details?: MessageDetails;
@@ -27,8 +28,11 @@ type StudyCard = {
   cardId: string | null;
   korean: string;
   baseSpanish: string;
+  // ✅ 이 문장의 TTS를 저장/조회할 때 쓰는 안정 키 (가능하면 dbId)
+  ttsKey: string;
 };
 
+// ✅ studyState는 messageKey(=dbId 우선)로 관리
 type StudyState = Record<string, StudyCard>;
 
 type ChatFlow = "loading" | "guestNew" | "existingSession" | "newConfigured" | "invalid";
@@ -50,8 +54,9 @@ export default function ChatWindow() {
   const shouldAutoScrollRef = useRef(true);
 
   // TTS 관련
+  // ✅ 캐시는 "audioId(=sessionId/dbId)" 기준으로 저장해야 reload/복원에도 일관됨
   const audioCacheRef = useRef<Map<string, string>>(new Map());
-  const [playingMessageId, setPlayingMessageId] = useState<string | null>(null);
+  const [playingMessageKey, setPlayingMessageKey] = useState<string | null>(null);
   const currentAudioRef = useRef<HTMLAudioElement | null>(null);
 
   // ✅ 프로필(TTS 권한) 관련
@@ -92,7 +97,7 @@ export default function ChatWindow() {
   // 학습 상태
   const [studyState, setStudyState] = useState<StudyState>({});
   const [isStudyModalOpen, setIsStudyModalOpen] = useState(false);
-  const [activeStudyMessageId, setActiveStudyMessageId] = useState<string | null>(null);
+  const [activeStudyKey, setActiveStudyKey] = useState<string | null>(null);
   const [isStudyLoading, setIsStudyLoading] = useState(false);
 
   // 4단계 위저드 상태
@@ -101,6 +106,16 @@ export default function ChatWindow() {
   const [selectedLevel, setSelectedLevel] = useState<string | null>(null);
   const [selectedPersona, setSelectedPersona] = useState<string | null>(null);
   const [isCreatingConfiguredSession, setIsCreatingConfiguredSession] = useState(false);
+
+  // ✅ messageKey: dbId 우선 (TTS/학습/캐시의 핵심 키)
+  const getMessageKey = (m: ChatMessage) => m.dbId ?? m.id;
+
+  // ✅ audioId: 반드시 sessionId + (dbId 우선)로 고정
+  const getAudioId = (m: ChatMessage) => {
+    if (!sessionId) return null;
+    const key = getMessageKey(m);
+    return `${sessionId}/${key}`;
+  };
 
   // ✅ (선택) 사용자가 위로 스크롤하면 자동 스크롤 OFF / 바닥 근처면 ON
   useEffect(() => {
@@ -330,8 +345,10 @@ export default function ChatWindow() {
 
         setSessionId(session.id);
 
+        // ✅ 핵심: 프론트 id와 DB id를 분리해서 복원
         const restored: ChatMessage[] = rows.map((m: any) => ({
-          id: m.id,
+          id: makeId(), // UI용
+          dbId: m.id, // ✅ DB chat_messages.id
           role: m.role,
           content: m.content,
           details: m.details ?? undefined,
@@ -500,11 +517,14 @@ export default function ChatWindow() {
         return;
       }
 
-      if (playingMessageId === message.id && currentAudioRef.current) {
+      // ✅ 안정 키 기반(가능하면 dbId)으로 재생 상태를 관리
+      const messageKey = getMessageKey(message);
+
+      if (playingMessageKey === messageKey && currentAudioRef.current) {
         currentAudioRef.current.pause();
         currentAudioRef.current.currentTime = 0;
         currentAudioRef.current = null;
-        setPlayingMessageId(null);
+        setPlayingMessageKey(null);
         return;
       }
 
@@ -512,25 +532,7 @@ export default function ChatWindow() {
         currentAudioRef.current.pause();
         currentAudioRef.current.currentTime = 0;
         currentAudioRef.current = null;
-        setPlayingMessageId(null);
-      }
-
-      if (audioCacheRef.current.has(message.id)) {
-        const existingUrl = audioCacheRef.current.get(message.id)!;
-        const audio = new Audio(existingUrl);
-        currentAudioRef.current = audio;
-        setPlayingMessageId(message.id);
-
-        audio.play();
-        audio.onended = () => {
-          setPlayingMessageId(null);
-          currentAudioRef.current = null;
-        };
-        audio.onerror = () => {
-          setPlayingMessageId(null);
-          currentAudioRef.current = null;
-        };
-        return;
+        setPlayingMessageKey(null);
       }
 
       if (!sessionId) {
@@ -538,7 +540,30 @@ export default function ChatWindow() {
         return;
       }
 
-      const audioId = `${sessionId}/${message.id}`;
+      const audioId = getAudioId(message);
+      if (!audioId) {
+        alert("세션 정보가 없어서 음성을 재생할 수 없어요 🥲");
+        return;
+      }
+
+      // ✅ 캐시 hit
+      if (audioCacheRef.current.has(audioId)) {
+        const existingUrl = audioCacheRef.current.get(audioId)!;
+        const audio = new Audio(existingUrl);
+        currentAudioRef.current = audio;
+        setPlayingMessageKey(messageKey);
+
+        audio.play();
+        audio.onended = () => {
+          setPlayingMessageKey(null);
+          currentAudioRef.current = null;
+        };
+        audio.onerror = () => {
+          setPlayingMessageKey(null);
+          currentAudioRef.current = null;
+        };
+        return;
+      }
 
       const accessToken = await getAccessToken();
       if (!accessToken) {
@@ -546,7 +571,7 @@ export default function ChatWindow() {
         return;
       }
 
-      setPlayingMessageId(message.id);
+      setPlayingMessageKey(messageKey);
 
       const res = await fetch("/api/tts", {
         method: "POST",
@@ -564,7 +589,7 @@ export default function ChatWindow() {
       if (res.status === 401 || res.status === 403) {
         const data = await res.json().catch(() => null);
         console.warn("TTS blocked:", data);
-        setPlayingMessageId(null);
+        setPlayingMessageKey(null);
 
         setLaunchRequestedDone(false);
         setLaunchConsent(false);
@@ -583,24 +608,24 @@ export default function ChatWindow() {
 
       if (!url) throw new Error("TTS URL이 응답에 없어요");
 
-      audioCacheRef.current.set(message.id, url);
+      audioCacheRef.current.set(audioId, url);
 
       const audio = new Audio(url);
       currentAudioRef.current = audio;
 
       audio.play();
       audio.onended = () => {
-        setPlayingMessageId(null);
+        setPlayingMessageKey(null);
         currentAudioRef.current = null;
       };
       audio.onerror = () => {
-        setPlayingMessageId(null);
+        setPlayingMessageKey(null);
         currentAudioRef.current = null;
       };
     } catch (err) {
       console.error(err);
       alert("음성 재생 중 오류가 발생했어 😢");
-      setPlayingMessageId(null);
+      setPlayingMessageKey(null);
       currentAudioRef.current = null;
     }
   };
@@ -676,9 +701,9 @@ export default function ChatWindow() {
     setSessionId(null);
     setHasStarted(false);
     setExpandedMessageIds([]);
-    setPlayingMessageId(null);
+    setPlayingMessageKey(null);
     setStudyState({});
-    setActiveStudyMessageId(null);
+    setActiveStudyKey(null);
 
     // ✅ 리셋 시 auto-scroll ON
     shouldAutoScrollRef.current = true;
@@ -716,12 +741,6 @@ export default function ChatWindow() {
 
       const data = await res.json().catch(() => null);
 
-      // 🔍 추가 로그
-      console.log("🔍 /api/session/create-configured 응답", {
-        status: res.status,
-        data,
-      });
-
       if (!res.ok || data?.error) {
         console.error("session/delete error:", data);
         alert("대화를 삭제하는 중 문제가 발생했어요 🥲");
@@ -743,10 +762,10 @@ export default function ChatWindow() {
       return;
     }
 
-    const messageId = message.id;
-    const existing = studyState[messageId];
+    const messageKey = getMessageKey(message);
+    const existing = studyState[messageKey];
     if (existing) {
-      setActiveStudyMessageId(messageId);
+      setActiveStudyKey(messageKey);
       setIsStudyModalOpen(true);
       return;
     }
@@ -773,7 +792,7 @@ export default function ChatWindow() {
           // message state에 correction 저장
           setMessages((prev) =>
             prev.map((m) =>
-              m.id === messageId
+              m.id === message.id
                 ? {
                     ...m,
                     details: {
@@ -807,7 +826,7 @@ export default function ChatWindow() {
           "Content-Type": "application/json",
           ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
         },
-        body: JSON.stringify({ text: baseSpanish, sessionId, messageId }),
+        body: JSON.stringify({ text: baseSpanish, sessionId }),
       });
 
       const prep = await prepRes.json().catch(() => null);
@@ -816,16 +835,20 @@ export default function ChatWindow() {
         return;
       }
 
+      // ✅ TTS 키: 가능하면 dbId를 쓰고, 없으면 messageKey(임시)
+      const ttsKey = message.dbId ?? messageKey;
+
       setStudyState((prev) => ({
         ...prev,
-        [messageId]: {
+        [messageKey]: {
           cardId: prep.cardId ?? null,
           korean: prep.korean,
           baseSpanish,
+          ttsKey,
         },
       }));
 
-      setActiveStudyMessageId(messageId);
+      setActiveStudyKey(messageKey);
       setIsStudyModalOpen(true);
     } finally {
       setIsStudyLoading(false);
@@ -947,8 +970,10 @@ export default function ChatWindow() {
 
     const trimmed = input.trim();
 
+    const tempUserId = makeId();
+
     const userMessage: ChatMessage = {
-      id: makeId(),
+      id: tempUserId,
       role: "user",
       content: trimmed,
     };
@@ -993,6 +1018,20 @@ export default function ChatWindow() {
           const saveUserData = await saveUserRes.json().catch(() => null);
           if (!saveUserRes.ok || saveUserData?.ok === false) {
             console.error("message/add (user) error:", saveUserData);
+          } else {
+            // ✅ 가능한 형태들을 넓게 커버해서 dbId 주입
+            const dbId =
+              saveUserData?.id ??
+              saveUserData?.message?.id ??
+              saveUserData?.data?.id ??
+              saveUserData?.messageId ??
+              null;
+
+            if (dbId) {
+              setMessages((prev) =>
+                prev.map((m) => (m.id === tempUserId ? { ...m, dbId } : m))
+              );
+            }
           }
         } catch (saveErr) {
           console.error("message/add (user) fetch error:", saveErr);
@@ -1017,12 +1056,12 @@ export default function ChatWindow() {
       const chatData = await chatRes.json().catch(() => null);
       const fullAssistantText = chatData?.reply ?? "응답을 가져오지 못했어요.";
 
-      const assistantId = makeId();
+      const tempAssistantId = makeId();
 
       setMessages((prev) => [
         ...prev,
         {
-          id: assistantId,
+          id: tempAssistantId,
           role: "assistant",
           content: "",
         },
@@ -1050,6 +1089,19 @@ export default function ChatWindow() {
           const saveAssistantData = await saveAssistantRes.json().catch(() => null);
           if (!saveAssistantRes.ok || saveAssistantData?.ok === false) {
             console.error("message/add (assistant) error:", saveAssistantData);
+          } else {
+            const dbId =
+              saveAssistantData?.id ??
+              saveAssistantData?.message?.id ??
+              saveAssistantData?.data?.id ??
+              saveAssistantData?.messageId ??
+              null;
+
+            if (dbId) {
+              setMessages((prev) =>
+                prev.map((m) => (m.id === tempAssistantId ? { ...m, dbId } : m))
+              );
+            }
           }
         } catch (saveErr) {
           console.error("message/add (assistant) fetch error:", saveErr);
@@ -1085,7 +1137,7 @@ export default function ChatWindow() {
   };
 
   const activeStudyCard: StudyCard | null =
-    activeStudyMessageId ? studyState[activeStudyMessageId] ?? null : null;
+    activeStudyKey ? studyState[activeStudyKey] ?? null : null;
 
   // 언어/레벨/페르소나 라벨
   const languageLabel = (code: string | null) => {
@@ -1522,6 +1574,8 @@ export default function ChatWindow() {
                 const isExpanded = expandedMessageIds.includes(msg.id);
                 const hasDetails = !!msg.details && !msg.detailsError;
 
+                const messageKey = getMessageKey(msg);
+
                 return (
                   <div
                     key={msg.id}
@@ -1671,9 +1725,9 @@ export default function ChatWindow() {
                                   opacity: isProfileLoading ? 0.6 : 1,
                                 }}
                                 disabled={isProfileLoading}
-                                aria-label={playingMessageId === msg.id ? "문장 정지" : "문장 듣기"}
+                                aria-label={playingMessageKey === messageKey ? "문장 정지" : "문장 듣기"}
                               >
-                                {playingMessageId === msg.id ? "⏹️" : "▶️"}
+                                {playingMessageKey === messageKey ? "⏹️" : "▶️"}
                               </button>
                             )}
                           </div>
@@ -2095,9 +2149,7 @@ export default function ChatWindow() {
 
               <div style={{ marginBottom: "10px" }}>
                 <strong>3. 보유 및 이용 기간</strong>
-                <div style={{ marginTop: "2px", color: "#cbd5e1" }}>
-                  음성 기능 출시 시 즉시 파기
-                </div>
+                <div style={{ marginTop: "2px", color: "#cbd5e1" }}>음성 기능 출시 시 즉시 파기</div>
               </div>
 
               <div style={{ marginBottom: "10px" }}>
@@ -2143,7 +2195,6 @@ export default function ChatWindow() {
         }}
         card={activeStudyCard}
         sessionId={sessionId}
-        messageId={activeStudyMessageId}
         canUseTTS={!isGuest && ttsEnabled}
       />
     </>
@@ -2155,11 +2206,10 @@ type StudyModalProps = {
   onClose: () => void;
   card: StudyCard | null;
   sessionId: string | null;
-  messageId: string | null;
   canUseTTS: boolean;
 };
 
-function StudyModal({ isOpen, onClose, card, sessionId, messageId, canUseTTS }: StudyModalProps) {
+function StudyModal({ isOpen, onClose, card, sessionId, canUseTTS }: StudyModalProps) {
   const [answer, setAnswer] = useState("");
   const [feedback, setFeedback] = useState<{
     correct_answer: string;
@@ -2253,7 +2303,7 @@ function StudyModal({ isOpen, onClose, card, sessionId, messageId, canUseTTS }: 
       return;
     }
 
-    if (!messageId) {
+    if (!card.ttsKey) {
       alert("메시지 정보가 없어 음성을 재생할 수 없어요 🥲");
       return;
     }
@@ -2263,7 +2313,8 @@ function StudyModal({ isOpen, onClose, card, sessionId, messageId, canUseTTS }: 
       return;
     }
 
-    const audioId = `${sessionId}/${messageId}`;
+    // ✅ 핵심: StudyModal도 sessionId + (dbId 우선)로 저장/조회
+    const audioId = `${sessionId}/${card.ttsKey}`;
 
     try {
       if (ttsAudioRef.current) {
