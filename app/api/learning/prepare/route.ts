@@ -58,18 +58,25 @@ async function getSessionConfig(sessionId?: string | null) {
 }
 
 async function generateKoreanPrompt(targetLanguageCode: string, sentence: string) {
+  // ✅ 안전: 너무 길면 잘라서 품질/비용/안정성 확보 (원하면 숫자 조절)
+  const cleaned = String(sentence ?? "").trim().slice(0, 600);
+
+  // ✅ 영어 프롬프트로 안정화 (JSON only 강제)
   const prompt = `
-다음 ${languageName(targetLanguageCode)} 문장을 학습용으로 변환해줘.
+Convert the following ${languageName(targetLanguageCode)} sentence into a Korean prompt for speaking practice.
 
-자연스러운 한국어 문장으로 번역
-
-반드시 JSON 형식으로만 출력해:
+Requirements:
+- Translate into NATURAL Korean that a real person would say.
+- Keep it short and easy to speak aloud.
+- Do NOT add explanations.
+- Output ONLY valid JSON with exactly this shape:
 
 {
   "korean": "자연스러운 한국어 번역"
 }
 
-원문: """${sentence}"""
+Original sentence:
+"""${cleaned}"""
 `.trim();
 
   const res = await client.chat.completions.create({
@@ -77,7 +84,9 @@ async function generateKoreanPrompt(targetLanguageCode: string, sentence: string
     messages: [
       {
         role: "system",
-        content: "너는 외국어 문장을 한국어 학습용 문장으로 바꿔주는 튜터야. 항상 JSON만 반환해.",
+        content:
+          "You convert a single foreign-language sentence into natural Korean for speaking practice. " +
+          "Return ONLY a valid JSON object with the key 'korean'. No extra text.",
       },
       { role: "user", content: prompt },
     ],
@@ -88,7 +97,7 @@ async function generateKoreanPrompt(targetLanguageCode: string, sentence: string
   const parsed = JSON.parse(raw);
 
   return {
-    korean: typeof parsed.korean === "string" ? parsed.korean : sentence,
+    korean: typeof parsed.korean === "string" ? parsed.korean.trim() : cleaned,
   };
 }
 

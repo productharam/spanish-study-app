@@ -1,3 +1,4 @@
+// app/api/learning/answer/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseServer } from "@/lib/supabaseServerClient";
 import OpenAI from "openai";
@@ -78,6 +79,10 @@ Rules:
 - Minor casing differences do not matter.
 - Judge meaning and structure, not exact symbols.
 - Respond ONLY in JSON. No extra text.
+- Sound like a real person having a casual conversation.
+- Use words, expressions, and sentence patterns that native speakers commonly use in everyday life.
+- Prefer natural, daily spoken language over formal, literary, or textbook-style expressions.
+- Avoid rare, academic, or overly polite phrasing unless it is genuinely used in casual conversation.
 
 Return EXACTLY this JSON:
 {
@@ -108,7 +113,8 @@ ${userAnswer}
   const parsed = JSON.parse(raw);
 
   return {
-    correct_answer: typeof parsed.correct_answer === "string" ? parsed.correct_answer : correctSentence,
+    correct_answer:
+      typeof parsed.correct_answer === "string" ? parsed.correct_answer : correctSentence,
     tip: typeof parsed.tip === "string" ? parsed.tip : "",
     is_correct: Boolean(parsed.is_correct),
   };
@@ -149,7 +155,10 @@ export async function POST(req: NextRequest) {
 
     if (cardError) {
       console.error("learning_cards select error:", cardError);
-      return NextResponse.json({ error: "학습 카드를 조회하는 중 오류가 발생했어요." }, { status: 500 });
+      return NextResponse.json(
+        { error: "학습 카드를 조회하는 중 오류가 발생했어요." },
+        { status: 500 }
+      );
     }
     if (!card) {
       return NextResponse.json({ error: "학습 카드를 찾을 수 없습니다." }, { status: 404 });

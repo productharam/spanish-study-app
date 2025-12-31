@@ -117,6 +117,14 @@ export default function ChatWindow() {
     return `${sessionId}/${key}`;
   };
 
+  // ✅ 출시요청 모달 열기(공통)
+  const openLaunchRequestModal = () => {
+    setLaunchRequestedDone(false);
+    setLaunchConsent(false);
+    setShowPrivacyNoticeModal(false);
+    setShowLaunchRequestModal(true);
+  };
+
   // ✅ (선택) 사용자가 위로 스크롤하면 자동 스크롤 OFF / 바닥 근처면 ON
   useEffect(() => {
     const el = scrollContainerRef.current;
@@ -511,9 +519,7 @@ export default function ChatWindow() {
 
       // ✅ 권한 없으면 출시요청 모달
       if (!ttsEnabled) {
-        setLaunchRequestedDone(false);
-        setLaunchConsent(false);
-        setShowLaunchRequestModal(true);
+        openLaunchRequestModal();
         return;
       }
 
@@ -591,9 +597,7 @@ export default function ChatWindow() {
         console.warn("TTS blocked:", data);
         setPlayingMessageKey(null);
 
-        setLaunchRequestedDone(false);
-        setLaunchConsent(false);
-        setShowLaunchRequestModal(true);
+        openLaunchRequestModal();
         return;
       }
 
@@ -857,8 +861,6 @@ export default function ChatWindow() {
 
   /**
    * ✅ 4단계 설정 완료 후 "대화 시작하기"
-   *  - /api/session/create-configured 호출(로그인)
-   *  - 게스트: isGuest:true로 보내 DB 저장 없이 인사만 받아오기(백엔드에서 처리)
    */
   const handleStartConfiguredConversation = async () => {
     if (!selectedLanguage || !selectedLevel || !selectedPersona) {
@@ -1028,9 +1030,7 @@ export default function ChatWindow() {
               null;
 
             if (dbId) {
-              setMessages((prev) =>
-                prev.map((m) => (m.id === tempUserId ? { ...m, dbId } : m))
-              );
+              setMessages((prev) => prev.map((m) => (m.id === tempUserId ? { ...m, dbId } : m)));
             }
           }
         } catch (saveErr) {
@@ -1098,9 +1098,7 @@ export default function ChatWindow() {
               null;
 
             if (dbId) {
-              setMessages((prev) =>
-                prev.map((m) => (m.id === tempAssistantId ? { ...m, dbId } : m))
-              );
+              setMessages((prev) => prev.map((m) => (m.id === tempAssistantId ? { ...m, dbId } : m)));
             }
           }
         } catch (saveErr) {
@@ -1136,8 +1134,7 @@ export default function ChatWindow() {
     }
   };
 
-  const activeStudyCard: StudyCard | null =
-    activeStudyKey ? studyState[activeStudyKey] ?? null : null;
+  const activeStudyCard: StudyCard | null = activeStudyKey ? studyState[activeStudyKey] ?? null : null;
 
   // 언어/레벨/페르소나 라벨
   const languageLabel = (code: string | null) => {
@@ -1692,11 +1689,7 @@ export default function ChatWindow() {
 
                             {!isGuest && !ttsEnabled ? (
                               <button
-                                onClick={() => {
-                                  setLaunchRequestedDone(false);
-                                  setLaunchConsent(false);
-                                  setShowLaunchRequestModal(true);
-                                }}
+                                onClick={openLaunchRequestModal}
                                 style={{
                                   fontSize: "12px",
                                   padding: "4px 10px",
@@ -1944,7 +1937,7 @@ export default function ChatWindow() {
         </div>
       )}
 
-      {/* 🔔 TTS 출시요청 모달 */}
+      {/* 🔔 TTS 출시요청 모달 (✅ zIndex를 학습 모달보다 높게!) */}
       {showLaunchRequestModal && (
         <div
           style={{
@@ -1954,7 +1947,7 @@ export default function ChatWindow() {
             display: "flex",
             justifyContent: "center",
             alignItems: "center",
-            zIndex: 55,
+            zIndex: 65, // ✅ StudyModal(60)보다 높게
           }}
         >
           <div
@@ -2007,7 +2000,7 @@ export default function ChatWindow() {
               </span>
             </label>
 
-            {/* ✅ (추가) 전문보기 버튼 */}
+            {/* ✅ 전문보기 버튼 */}
             <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "14px" }}>
               <button
                 type="button"
@@ -2098,7 +2091,7 @@ export default function ChatWindow() {
             display: "flex",
             justifyContent: "center",
             alignItems: "center",
-            zIndex: 56,
+            zIndex: 66, // ✅ 출시요청(65)보다도 위
           }}
           onClick={() => setShowPrivacyNoticeModal(false)}
         >
@@ -2196,6 +2189,8 @@ export default function ChatWindow() {
         card={activeStudyCard}
         sessionId={sessionId}
         canUseTTS={!isGuest && ttsEnabled}
+        isGuest={isGuest}
+        onOpenLaunchRequestModal={openLaunchRequestModal}
       />
     </>
   );
@@ -2207,9 +2202,11 @@ type StudyModalProps = {
   card: StudyCard | null;
   sessionId: string | null;
   canUseTTS: boolean;
+  isGuest: boolean;
+  onOpenLaunchRequestModal: () => void;
 };
 
-function StudyModal({ isOpen, onClose, card, sessionId, canUseTTS }: StudyModalProps) {
+function StudyModal({ isOpen, onClose, card, sessionId, canUseTTS, isGuest, onOpenLaunchRequestModal }: StudyModalProps) {
   const [answer, setAnswer] = useState("");
   const [feedback, setFeedback] = useState<{
     correct_answer: string;
@@ -2293,8 +2290,13 @@ function StudyModal({ isOpen, onClose, card, sessionId, canUseTTS }: StudyModalP
 
   // 🔊 학습 모달 안 TTS
   const handlePlayTTS = async () => {
+    // ✅ 여기서 alert 대신 "출시요청 모달"을 부모에게 요청
     if (!canUseTTS) {
-      alert("음성 기능은 현재 플랜에서 사용할 수 없어요 🙂");
+      if (isGuest) {
+        alert("TTS는 로그인 후 사용할 수 있어요 🙂");
+        return;
+      }
+      onOpenLaunchRequestModal();
       return;
     }
 
@@ -2359,6 +2361,14 @@ function StudyModal({ isOpen, onClose, card, sessionId, canUseTTS }: StudyModalP
         }),
       });
 
+      // ✅ 혹시 서버에서 401/403로 막아도 "출시요청"으로 유도
+      if (res.status === 401 || res.status === 403) {
+        const blocked = await res.json().catch(() => null);
+        console.warn("StudyModal TTS blocked:", blocked);
+        onOpenLaunchRequestModal();
+        return;
+      }
+
       const data = await res.json().catch(() => null);
 
       if (!res.ok || !data?.url) {
@@ -2399,7 +2409,7 @@ function StudyModal({ isOpen, onClose, card, sessionId, canUseTTS }: StudyModalP
         display: "flex",
         justifyContent: "center",
         alignItems: "center",
-        zIndex: 60,
+        zIndex: 60, // ✅ 학습 모달
       }}
     >
       <div

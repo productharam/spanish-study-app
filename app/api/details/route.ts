@@ -77,14 +77,14 @@ function personaStyle(personaType: string, uiLang: UiLang) {
   if (uiLang === "ko") {
     switch (p) {
       case "friend":
-  return [
-    "MUST use casual Korean (반말).",
-    "You MAY lightly use Korean internet/casual community tone endings like '~함', '~임', '~같음' SOMETIMES.",
-    "Do NOT overuse it. Use at most once per field (grammar or tip).",
-    "End sentences casually (e.g., ~야/~해/~지) when not using '~함' style.",
-    "Short, friendly, like a close friend.",
-    "No lecturing, no formal tone.",
-  ].join(" ");
+        return [
+          "MUST use casual Korean (반말).",
+          "You MAY lightly use Korean internet/casual community tone endings like '~함', '~임', '~같음' SOMETIMES.",
+          "Do NOT overuse it. Use at most once per field (grammar or tip).",
+          "End sentences casually (e.g., ~야/~해/~지) when not using '~함' style.",
+          "Short, friendly, like a close friend.",
+          "No lecturing, no formal tone.",
+        ].join(" ");
       case "coworker":
         return [
           "MUST use polite casual Korean (해요체).",
@@ -233,9 +233,6 @@ Sentence:
     return NextResponse.json(result);
   } catch (err) {
     console.error("❌ /api/details error:", err);
-    return NextResponse.json(
-      { error: "Failed to generate details" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: "Failed to generate details" }, { status: 500 });
   }
 }

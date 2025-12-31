@@ -1,3 +1,4 @@
+// app/api/chat/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import OpenAI from "openai";
 import { supabaseServer } from "@/lib/supabaseServerClient";
@@ -46,19 +47,182 @@ function levelGuide(level: string) {
   }
 }
 
+function normalizePersona(p?: string | null) {
+  const v = (p ?? "").toLowerCase().trim();
+  if (v === "friend") return "friend";
+  if (v === "coworker") return "coworker";
+  if (v === "teacher") return "teacher";
+  if (v === "traveler") return "traveler";
+  return "friend";
+}
+
+function normalizeLevel(l?: string | null) {
+  const v = (l ?? "").toLowerCase().trim();
+  if (v === "beginner") return "beginner";
+  if (v === "elementary") return "elementary";
+  if (v === "intermediate") return "intermediate";
+  if (v === "advanced") return "advanced";
+  return "beginner";
+}
+
+function normalizeLanguage(code?: string | null) {
+  const v = (code ?? "").toLowerCase().trim();
+  if (["en", "ja", "zh", "es", "fr", "ru", "ar"].includes(v)) return v;
+  return "es";
+}
+
 function personaGuide(persona: string) {
   switch (persona) {
     case "friend":
-      return "Friendly, warm, casual.";
+      return "Close friend vibe: warm, casual, relaxed.";
     case "coworker":
-      return "Polite, concise, supportive coworker tone.";
+      return "Coworker vibe: polite, concise, supportive, not stiff.";
     case "teacher":
-      return "Kind but structured. No long lectures.";
+      return "Teacher vibe: structured, firm, clear, not verbose.";
     case "traveler":
-      return "Energetic, travel-buddy vibe.";
+      return "Travel buddy vibe: friendly, energetic, practical.";
     default:
       return "Natural and helpful.";
   }
+}
+
+/**
+ * ✅ 핵심: "분위기"가 아니라 "레지스터/말투 규칙"을 언어별로 강제
+ * - friend/traveler: 더 캐주얼 (가능하면 비격식)
+ * - coworker/teacher: 더 공손/격식 (너무 딱딱하진 않게)
+ */
+function personaSpeechRules(language: string, personaType: string) {
+  const lang = normalizeLanguage(language);
+  const p = normalizePersona(personaType);
+
+  // 공통: friend/traveler는 캐주얼, coworker/teacher는 공손
+  const register =
+    p === "friend" || p === "traveler"
+      ? "casual/informal"
+      : "polite/neutral (not stiff)";
+
+  // 언어별 강제 규칙
+  if (lang === "es") {
+    // Spanish: tú vs usted
+    if (p === "friend" || p === "traveler") {
+      return [
+        "Register: MUST be casual and friendly.",
+        "MUST address the user with 'tú' (NOT 'usted').",
+        "Use everyday spoken Spanish (Spain). Avoid overly formal phrasing.",
+      ].join(" ");
+    }
+    // coworker / teacher
+    return [
+      "Register: MUST be polite but natural.",
+      "Prefer 'usted' OR a neutral professional tone (avoid slang).",
+      "Do NOT sound ceremonial; keep it short and spoken.",
+    ].join(" ");
+  }
+
+  if (lang === "fr") {
+    // French: tu vs vous
+    if (p === "friend" || p === "traveler") {
+      return [
+        "Register: MUST be casual and friendly.",
+        "MUST use 'tu' (NOT 'vous').",
+        "Use everyday spoken French. Keep it short.",
+      ].join(" ");
+    }
+    return [
+      "Register: MUST be polite and professional but natural.",
+      "MUST use 'vous' (NOT 'tu').",
+      "Avoid slang. Keep it short and spoken.",
+    ].join(" ");
+  }
+
+  if (lang === "ja") {
+    // Japanese: タメ口 vs です・ます / teacher
+    if (p === "friend" || p === "traveler") {
+      return [
+        "Register: MUST be casual Japanese (タメ口).",
+        "Do NOT use です/ます unless absolutely necessary.",
+        "Use natural everyday expressions. Keep it short.",
+      ].join(" ");
+    }
+    if (p === "teacher") {
+      return [
+        "Register: MUST be teacher-like Japanese.",
+        "Use です/ます consistently.",
+        "Short, clear, structured. No long explanations.",
+      ].join(" ");
+    }
+    // coworker
+    return [
+      "Register: MUST be polite Japanese (です/ます).",
+      "Professional but relaxed. Not stiff.",
+      "Keep it short.",
+    ].join(" ");
+  }
+
+  if (lang === "zh") {
+    // Chinese: informal vs polite (no strong pronoun distinction like tu/vous)
+    if (p === "friend" || p === "traveler") {
+      return [
+        "Register: MUST be casual, friendly spoken Chinese.",
+        "Use natural everyday phrasing. Keep it short.",
+      ].join(" ");
+    }
+    return [
+      "Register: MUST be polite and clear, but still conversational.",
+      "Avoid internet slang. Keep it short.",
+    ].join(" ");
+  }
+
+  if (lang === "ru") {
+    // Russian: ты vs вы
+    if (p === "friend" || p === "traveler") {
+      return [
+        "Register: MUST be casual and friendly.",
+        "MUST use 'ты' (NOT 'вы').",
+        "Use natural spoken Russian. Keep it short.",
+      ].join(" ");
+    }
+    return [
+      "Register: MUST be polite and professional but natural.",
+      "MUST use 'вы' (NOT 'ты').",
+      "Keep it short and conversational.",
+    ].join(" ");
+  }
+
+  if (lang === "ar") {
+    // Arabic: tricky (dialect vs MSA). We'll keep it practical:
+    if (p === "friend" || p === "traveler") {
+      return [
+        "Register: MUST be friendly and casual.",
+        "Use simple, commonly spoken Arabic (avoid overly formal, classical phrasing).",
+        "Keep it short.",
+      ].join(" ");
+    }
+    return [
+      "Register: MUST be polite and clear, but not overly formal.",
+      "Avoid classical/ceremonial tone. Keep it short.",
+    ].join(" ");
+  }
+
+  // English (and fallback)
+  if (p === "friend" || p === "traveler") {
+    return [
+      `Register: MUST be ${register}.`,
+      "Use contractions and everyday spoken phrasing.",
+      "Do NOT sound formal. Keep it short.",
+    ].join(" ");
+  }
+  if (p === "teacher") {
+    return [
+      `Register: MUST be ${register}.`,
+      "Clear, structured, slightly firm, but not cold.",
+      "No long explanations. Keep it short.",
+    ].join(" ");
+  }
+  return [
+    `Register: MUST be ${register}.`,
+    "Professional but relaxed. Keep it short.",
+  ].join(" ");
 }
 
 async function getSessionConfig(sessionId?: string | null) {
@@ -156,13 +320,19 @@ export async function POST(req: NextRequest) {
 
     const cfg = await getSessionConfig(sessionId);
 
-    const language = cfg?.language ?? bodyLanguage ?? "es";
-    const level = cfg?.level ?? bodyLevel ?? "beginner";
-    const personaType = cfg?.personaType ?? bodyPersonaType ?? "friend";
+    const language = normalizeLanguage(cfg?.language ?? bodyLanguage ?? "es");
+    const level = normalizeLevel(cfg?.level ?? bodyLevel ?? "beginner");
+    const personaType = normalizePersona(cfg?.personaType ?? bodyPersonaType ?? "friend");
+
+    // ✅ 페르소나에 따른 "말투/레지스터" 강제 규칙
+    const speechRules = personaSpeechRules(language, personaType);
 
     const systemPrompt = `
 You are a conversation partner for practicing ${languageName(language)}.
 User level: ${level}. Persona: ${personaType} (${personaGuide(personaType)}).
+
+[Persona speech rules — STRICT]
+${speechRules}
 
 [Core conversation rules — VERY IMPORTANT]
 - This is a spoken conversation, not text chatting.
@@ -182,16 +352,10 @@ User level: ${level}. Persona: ${personaType} (${personaGuide(personaType)}).
 - Keep messages short, natural, and easy to answer.
 - Sound like a real person having a casual conversation.
 - Use words, expressions, and sentence patterns that native speakers commonly use in everyday life.
-- Prefer natural, daily spoken language over formal, literary, or textbook-style expressions.
-- Avoid rare, academic, or overly polite phrasing unless it is genuinely used in casual conversation.
-
-[Style & tone]
-- You MAY naturally use casual slang that native speakers commonly use.
-- Slang should feel natural, not forced or excessive.
-- You MAY use short, natural interjections or exclamations
-  (e.g., mild reactions like "oh", "wow", "hmm", depending on the language).
-- Do NOT overuse slang or exclamations.
-- Avoid sounding dramatic or theatrical.
+- Prefer natural, daily spoken language over formal, literary, or textbook-style expressions,
+  EXCEPT when the Persona speech rules require a more polite/professional register.
+- When Persona speech rules require a register (e.g., tú/usted, tu/vous, タメ口/です・ます, ты/вы),
+  you MUST follow that register consistently.
 
 [Language rules]
 - Speak ONLY in ${languageName(language)}.
@@ -213,7 +377,7 @@ ${levelGuide(level)}
   - a short greeting
   - ask for their name
   - nothing else.
-`;
+`.trim();
 
     const finalMessages: { role: "system" | "user" | "assistant"; content: string }[] = [
       { role: "system", content: systemPrompt },
@@ -222,7 +386,7 @@ ${levelGuide(level)}
     if (isFirst) {
       finalMessages.push({
         role: "user",
-        content: "Start with a short greeting and ask my name.",
+        content: "Start with a short greeting and ask how I feel and my name.",
       });
     } else if (Array.isArray(messages)) {
       const recent = messages.slice(-8).map((m: any) => ({

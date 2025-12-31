@@ -179,9 +179,7 @@ Level hint: ${levelHint(level)}
 
 OUTPUT RULES (very important):
 - The learner input may be in ANY language (Korean, English, Japanese, romanization, etc.).
-- Your job is to output the best natural sentence in the TARGET language: ${languageName(
-      targetLanguage
-    )}.
+- Your job is to output the best natural sentence in the TARGET language: ${languageName(targetLanguage)}.
 - If the learner input is NOT in the target language, treat it as intended meaning and convert it into the target language.
 - If it IS already in the target language, do minimal correction only.
 
@@ -240,9 +238,6 @@ Learner input:
     return NextResponse.json(result);
   } catch (err) {
     console.error("❌ /api/details-user error:", err);
-    return NextResponse.json(
-      { error: "Failed to generate user details" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: "Failed to generate user details" }, { status: 500 });
   }
 }
