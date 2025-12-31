@@ -69,7 +69,7 @@ export default function LoginPage() {
             color: "#f9fafb",
           }}
         >
-          스페인어 공부 앱 로그인
+          말하면서 배우는 언어 챗봇
         </h1>
         <p
           style={{
@@ -78,9 +78,9 @@ export default function LoginPage() {
             marginBottom: "24px",
           }}
         >
-          Google 계정으로 로그인하고
+          로그인하고
           <br />
-          지난 대화를 이어서 사용할 수 있어요.
+          대화를 이어서 할 수 있어요.
         </p>
 
         <button

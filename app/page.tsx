@@ -31,23 +31,25 @@ export default function Home() {
     { slot: 3, session: null },
   ]);
   const [isLoadingSessions, setIsLoadingSessions] = useState(false);
-  const [deletingSessionId, setDeletingSessionId] = useState<string | null>(
-    null
-  );
+  const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null);
 
-  // ✅ 세션 카드가 “완전히 준비됐는지” 여부
   const [isSlotsReady, setIsSlotsReady] = useState(false);
-
-  // ✅ 화면 폭에 따라 가로/세로 배치 전환
   const [isNarrow, setIsNarrow] = useState(false);
 
-  useEffect(() => {
-    const handleResize = () => {
-      // 여기 기준 너가 원하는 데 맞춰서 768, 900 등으로 조절 가능
-      setIsNarrow(window.innerWidth < 900);
-    };
+  // ✅ 설정 모달
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
-    handleResize(); // 첫 렌더 후 한 번 체크
+  // ✅ 설정 > 회원탈퇴 상세 화면 토글
+  const [isWithdrawalOpen, setIsWithdrawalOpen] = useState(false);
+
+  // ✅ 회원탈퇴 체크/로딩/에러
+  const [deleteChecked, setDeleteChecked] = useState(false);
+  const [isDeletingAccount, setIsDeletingAccount] = useState(false);
+  const [deleteAccountError, setDeleteAccountError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const handleResize = () => setIsNarrow(window.innerWidth < 900);
+    handleResize();
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
   }, []);
@@ -61,11 +63,9 @@ export default function Home() {
 
     loadUser();
 
-    const { data: authListener } = supabase.auth.onAuthStateChange(
-      (_event, session) => {
-        setUser(session?.user ?? null);
-      }
-    );
+    const { data: authListener } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+    });
 
     return () => {
       authListener.subscription.unsubscribe();
@@ -75,7 +75,6 @@ export default function Home() {
   // ✅ 로그인된 경우에만 세션 목록 3개 로드
   useEffect(() => {
     const loadSessions = async () => {
-      // 비로그인: 세션 필요 없음
       if (!user) {
         setSlots([
           { slot: 1, session: null },
@@ -87,7 +86,7 @@ export default function Home() {
       }
 
       setIsLoadingSessions(true);
-      setIsSlotsReady(false); // 세션 새로 가져오는 동안은 스켈레톤 모드
+      setIsSlotsReady(false);
 
       try {
         const { data } = await supabase.auth.getSession();
@@ -95,11 +94,7 @@ export default function Home() {
 
         const res = await fetch("/api/sessions", {
           method: "GET",
-          headers: accessToken
-            ? {
-                Authorization: `Bearer ${accessToken}`,
-              }
-            : {},
+          headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
         });
 
         const json = await res.json().catch(() => null);
@@ -111,14 +106,11 @@ export default function Home() {
 
         const sessions: SessionSummary[] = json.sessions ?? [];
 
-        // slot 컬럼이 있다고 가정하고 1,2,3에 매핑
         const slotMap: Record<number, SessionSummary> = {};
         for (const s of sessions) {
           if (!s.slot) continue;
           if (s.slot < 1 || s.slot > 3) continue;
-          if (!slotMap[s.slot]) {
-            slotMap[s.slot] = s;
-          }
+          if (!slotMap[s.slot]) slotMap[s.slot] = s;
         }
 
         setSlots([
@@ -130,14 +122,13 @@ export default function Home() {
         console.error("loadSessions error:", e);
       } finally {
         setIsLoadingSessions(false);
-        setIsSlotsReady(true); // 세션 데이터 준비 완료
+        setIsSlotsReady(true);
       }
     };
 
     if (user) {
       loadSessions();
     } else if (user === null) {
-      // 비로그인
       setSlots([
         { slot: 1, session: null },
         { slot: 2, session: null },
@@ -154,24 +145,19 @@ export default function Home() {
     setUser(null);
   };
 
-  // ✅ 카드 클릭: 세션 이어하기 / 새로 시작하기
   const handleCardClick = (slot: number, session: SessionSummary | null) => {
     if (!user) {
-      // 로그인 안 되어 있으면 로그인 페이지로
       router.push("/login");
       return;
     }
 
     if (session) {
-      // 기존 세션 이어하기
       router.push(`/chat?sessionId=${session.id}`);
     } else {
-      // 새 세션 시작 (슬롯 지정 + 새로 생성 플래그)
       router.push(`/chat?slot=${slot}&new=1`);
     }
   };
 
-  // ✅ 세션 삭제
   const handleDeleteSession = async (session: SessionSummary) => {
     if (!user) return;
 
@@ -201,11 +187,8 @@ export default function Home() {
         return;
       }
 
-      // 삭제 후 로컬 슬롯에서 해당 세션 제거
       setSlots((prev) =>
-        prev.map((s) =>
-          s.session?.id === session.id ? { ...s, session: null } : s
-        )
+        prev.map((s) => (s.session?.id === session.id ? { ...s, session: null } : s))
       );
     } catch (e) {
       console.error("handleDeleteSession error:", e);
@@ -215,18 +198,14 @@ export default function Home() {
     }
   };
 
-  // ✅ config 텍스트 꾸미기 (언어/레벨/페르소나)
   const formatConfigLabel = (session: SessionSummary | null) => {
     if (!session) return "아직 설정된 정보가 없어요";
-
     const lang = session.language || "언어 미지정";
     const level = session.level || "레벨 미지정";
     const persona = session.persona_type || "페르소나 미지정";
-
     return `${lang} · ${level} · ${persona}`;
   };
 
-  // ✅ 언어 코드 기준으로 제목 표시
   const languageTitle = (session: SessionSummary | null) => {
     if (!session) return "아직 대화를 시작하지 않았어요";
 
@@ -250,304 +229,295 @@ export default function Home() {
     }
   };
 
-  // 카드 공통 스타일에서, 가로/세로에 따라 달라지는 부분만 분기
   const getCardLayoutStyle = () =>
-    isNarrow
-      ? {
-          width: "100%",
-        }
-      : {
-          flex: "1 1 0",
-          minWidth: "0",
-          maxWidth: "320px",
-        };
+    isNarrow ? { width: "100%" } : { flex: "1 1 0", minWidth: "0", maxWidth: "320px" };
 
-    return (
+  // ✅ 설정 열 때 초기화
+  const openSettings = () => {
+    setDeleteAccountError(null);
+    setDeleteChecked(false);
+    setIsWithdrawalOpen(false); // ✅ 기본은 목록 화면
+    setIsSettingsOpen(true);
+  };
+
+  const closeSettings = () => {
+    setIsSettingsOpen(false);
+    setIsWithdrawalOpen(false);
+  };
+
+  const openWithdrawal = () => {
+    setDeleteAccountError(null);
+    setDeleteChecked(false);
+    setIsWithdrawalOpen(true);
+  };
+
+  const backToSettingsRoot = () => {
+    setIsWithdrawalOpen(false);
+  };
+
+  // ✅ 회원탈퇴 호출
+  const handleDeleteAccount = async () => {
+    if (!user) return;
+
+    setDeleteAccountError(null);
+    setIsDeletingAccount(true);
+
+    try {
+      const { data } = await supabase.auth.getSession();
+      const accessToken = data.session?.access_token ?? null;
+      if (!accessToken) throw new Error("로그인이 필요합니다.");
+
+      const res = await fetch("/api/account/delete", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+
+      const json = await res.json().catch(() => null);
+
+      if (!res.ok || !json || json.ok === false) {
+        throw new Error(json?.error || "회원탈퇴 중 문제가 발생했어요.");
+      }
+
+      await supabase.auth.signOut();
+      setUser(null);
+      setIsSettingsOpen(false);
+      setIsWithdrawalOpen(false);
+      router.push("/");
+      router.refresh();
+    } catch (e: any) {
+      setDeleteAccountError(e?.message ?? "회원탈퇴 중 오류가 발생했어요.");
+    } finally {
+      setIsDeletingAccount(false);
+    }
+  };
+
+  return (
     <main
       style={{
-        // height: "100vh",          // ❌ 이건 지우고
-        minHeight: "100vh",          // ✅ 스크롤 가능하게
+        minHeight: "100vh",
         display: "flex",
         justifyContent: "center",
-        alignItems: isNarrow ? "flex-start" : "center", // ✅ 모바일은 위정렬
+        alignItems: "center",
         backgroundColor: "#000000",
-        padding: isNarrow ? "32px 16px 16px" : "16px",  // ✅ 모바일은 위쪽 여백 +16
+        padding: "16px",
         boxSizing: "border-box",
       }}
     >
-      <div
-        style={{
-          width: "100%",
-          maxWidth: "960px",
-          display: "flex",
-          flexDirection: "column",
-          gap: "20px",
-          alignItems: "center",
-        }}
-      >
-        {/* 상단 헤더 영역 */}
-<div
-  style={{
-    width: "100%",
-    display: "flex",
-    flexDirection: isNarrow ? "column" : "row",   // ✅ 좁으면 세로로
-    justifyContent: isNarrow ? "flex-start" : "space-between",
-    alignItems: isNarrow ? "flex-start" : "center",
-    gap: isNarrow ? 12 : 0,                       // 위아래 간격
-  }}
->
+      {/* ✅ 비로그인 상태: Hero를 화면 정중앙에 */}
+      {!isUserLoading && !user ? (
+        <div
+          style={{
+            width: "100%",
+            maxWidth: "960px",
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            justifyContent: "center",
+            textAlign: "center",
+            gap: "18px",
+            padding: "8px 0",
+          }}
+        >
           <div>
-            <h1
-              style={{
-                color: "#f9fafb",
-                fontSize: "24px",
-                marginBottom: "4px",
-              }}
-            >
+            <h1 style={{ color: "#f9fafb", fontSize: "24px", margin: "0 0 6px 0" }}>
               말하면서 배우는 언어 챗봇
             </h1>
-            <p
-              style={{
-                color: "#9ca3af",
-                fontSize: "13px",
-                margin: 0,
-              }}
-            >
-              음성, 번역, 학습 기능을 통해
+            <p style={{ color: "#9ca3af", fontSize: "13px", margin: 0, lineHeight: 1.6 }}>
+              실제 말하는 것처럼 대화하고,
               <br />
-              실제 대화하면서 언어를 익혀보세요.
+              모르는 문장을 반복 학습할 수 있어요
             </p>
           </div>
 
-          <div>
-            {isUserLoading ? (
-              <span style={{ color: "#9ca3af", fontSize: "13px" }}>
-                사용자 정보를 불러오는 중...
-              </span>
-            ) : user ? (
-  <div
-    style={{
-      display: "flex",
-      flexDirection: isNarrow ? "row" : "column",   // ✅ 좁으면 가로로 나란히
-      alignItems: isNarrow ? "center" : "flex-end",
-      justifyContent: isNarrow ? "space-between" : "flex-end",
-      gap: isNarrow ? 8 : 4,
-      width: isNarrow ? "100%" : "auto",           // 좁을 땐 전체 폭 사용
-    }}
-  >
-    <span
-      style={{
-        color: "#e5e7eb",
-        fontSize: "13px",
-        wordBreak: "break-all",                    // 긴 이메일 줄바꿈
-      }}
-    >
-      {user.email} 님
-    </span>
-    <button
-      onClick={handleLogout}
-      style={{
-        padding: "6px 12px",
-        fontSize: "12px",
-        borderRadius: "999px",
-        border: "1px solid #4b5563",
-        cursor: "pointer",
-        backgroundColor: "transparent",
-        color: "#e5e7eb",
-      }}
-    >
-      로그아웃
-    </button>
-  </div>
-) : (
-              <button
-                onClick={() => router.push("/login")}
-                style={{
-                  padding: "8px 16px",
-                  fontSize: "13px",
-                  borderRadius: "999px",
-                  border: "1px solid #4b5563",
-                  cursor: "pointer",
-                  backgroundColor: "transparent",
-                  color: "#e5e7eb",
-                }}
-              >
-                로그인
-              </button>
-            )}
-          </div>
-        </div>
+          <p style={{ color: "#9ca3af", fontSize: "14px", margin: 0, lineHeight: 1.7 }}>
+            로그인 없이 가볍게 체험하거나,
+            <br />
+            로그인 후 대화 기록을 저장할 수 있어요.
+          </p>
 
-        {/* 비로그인 상태: 체험 / 로그인 버튼 유지 */}
-        {!isUserLoading && !user && (
           <div
             style={{
-              marginTop: "8px",
               display: "flex",
-              flexDirection: "column",
-              alignItems: "center",
               gap: "12px",
+              flexWrap: "wrap",
+              justifyContent: "center",
             }}
           >
-            <p
+            <button
+              onClick={() => router.push("/chat?mode=guest")}
               style={{
-                color: "#9ca3af",
-                fontSize: "14px",
-                textAlign: "center",
+                padding: "14px 28px",
+                fontSize: "16px",
+                borderRadius: "12px",
+                border: "none",
+                cursor: "pointer",
+                boxShadow: "0 4px 10px rgba(0,0,0,0.3)",
+                backgroundColor: "#22c55e",
+                color: "#ffffff",
+                minWidth: "200px",
               }}
             >
-              로그인 없이 가볍게 체험하거나,
-              <br />
-              로그인 후 대화 기록을 저장할 수 있어요.
-            </p>
+              대화 체험하기
+            </button>
 
-            <div
+            <button
+              onClick={() => router.push("/login")}
               style={{
-                display: "flex",
-                gap: "12px",
-                flexWrap: "wrap",
-                justifyContent: "center",
+                padding: "12px 24px",
+                fontSize: "15px",
+                borderRadius: "999px",
+                border: "1px solid #4b5563",
+                cursor: "pointer",
+                backgroundColor: "transparent",
+                color: "#e5e7eb",
+                minWidth: "200px",
               }}
             >
-              <button
-                onClick={() => router.push("/chat?mode=guest")}
-                style={{
-                  padding: "14px 28px",
-                  fontSize: "16px",
-                  borderRadius: "12px",
-                  border: "none",
-                  cursor: "pointer",
-                  boxShadow: "0 4px 10px rgba(0,0,0,0.3)",
-                  backgroundColor: "#22c55e",
-                  color: "#ffffff",
-                  minWidth: "200px",
-                }}
-              >
-                대화 체험하기
-              </button>
-
-              <button
-                onClick={() => router.push("/login")}
-                style={{
-                  padding: "12px 24px",
-                  fontSize: "15px",
-                  borderRadius: "999px",
-                  border: "1px solid #4b5563",
-                  cursor: "pointer",
-                  backgroundColor: "transparent",
-                  color: "#e5e7eb",
-                  minWidth: "200px",
-                }}
-              >
-                로그인 후 사용하기
-              </button>
-            </div>
+              로그인 후 사용하기
+            </button>
           </div>
-        )}
-
-        {/* 로그인 상태: 3개 세션 카드 */}
-        {!isUserLoading && user && (
+        </div>
+      ) : (
+        // ✅ 로그인 상태(또는 로딩 중): 기존 레이아웃
+        <div
+          style={{
+            width: "100%",
+            maxWidth: "960px",
+            display: "flex",
+            flexDirection: "column",
+            gap: "20px",
+            alignItems: "center",
+          }}
+        >
+          {/* 상단 헤더 영역 */}
           <div
             style={{
               width: "100%",
-              marginTop: "8px",
+              display: "flex",
+              flexDirection: isNarrow ? "column" : "row",
+              justifyContent: isNarrow ? "flex-start" : "space-between",
+              alignItems: isNarrow ? "flex-start" : "center",
+              gap: isNarrow ? 12 : 0,
             }}
           >
             <div
               style={{
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                marginBottom: "8px",
+                width: isNarrow ? "100%" : "auto",
+                textAlign: isNarrow ? "center" : "left",
               }}
             >
-              <h2
+              <h1
                 style={{
                   color: "#f9fafb",
-                  fontSize: "18px",
-                  margin: 0,
+                  fontSize: "24px",
+                  marginBottom: "4px",
+                  marginTop: 0,
                 }}
               >
-                나의 대화 세션
-              </h2>
-              {isLoadingSessions && (
-                <span
-                  style={{
-                    color: "#9ca3af",
-                    fontSize: "12px",
-                  }}
-                >
-                  세션을 불러오는 중...
-                </span>
-              )}
+                말하면서 배우는 언어 챗봇
+              </h1>
+              <p style={{ color: "#9ca3af", fontSize: "13px", margin: 0 }}>
+                실제 말하는 것처럼 대화하고,
+                <br />
+                모르는 문장을 반복 학습할 수 있어요
+              </p>
             </div>
 
-            {/* ✅ 세션 준비 전: 스켈레톤 카드 */}
-            {!isSlotsReady ? (
-              <div
-                style={{
-                  display: "flex",
-                  gap: "12px",
-                  flexDirection: isNarrow ? "column" : "row",
-                  flexWrap: isNarrow ? "nowrap" : "wrap",
-                }}
-              >
-                {[1, 2, 3].map((slot) => (
-                  <div
-                    key={slot}
+            <div style={{ width: isNarrow ? "100%" : "auto" }}>
+              {isUserLoading ? (
+                <span style={{ color: "#9ca3af", fontSize: "13px" }}>
+                  사용자 정보를 불러오는 중...
+                </span>
+              ) : user ? (
+                <div
+                  style={{
+                    display: "flex",
+                    flexDirection: isNarrow ? "row" : "column",
+                    alignItems: isNarrow ? "center" : "flex-end",
+                    justifyContent: isNarrow ? "space-between" : "flex-end",
+                    gap: isNarrow ? 8 : 6,
+                    width: isNarrow ? "100%" : "auto",
+                  }}
+                >
+                  <span
                     style={{
-                      ...getCardLayoutStyle(),
-                      backgroundColor: "#111827",
-                      borderRadius: "16px",
-                      padding: "16px",
-                      border: "1px solid #1f2937",
-                      boxShadow: "0 6px 18px rgba(0,0,0,0.4)",
-                      display: "flex",
-                      flexDirection: "column",
-                      gap: "8px",
+                      color: "#e5e7eb",
+                      fontSize: "13px",
+                      wordBreak: "break-all",
                     }}
                   >
-                    <div
+                    {user.email} 님
+                  </span>
+
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button
+                      onClick={openSettings}
                       style={{
-                        width: "50%",
-                        height: "14px",
+                        padding: "6px 12px",
+                        fontSize: "12px",
                         borderRadius: "999px",
-                        backgroundColor: "#1f2937",
+                        border: "1px solid #4b5563",
+                        cursor: "pointer",
+                        backgroundColor: "transparent",
+                        color: "#e5e7eb",
                       }}
-                    />
-                    <div
+                    >
+                      설정
+                    </button>
+
+                    <button
+                      onClick={handleLogout}
                       style={{
-                        width: "80%",
-                        height: "18px",
-                        borderRadius: "8px",
-                        backgroundColor: "#1f2937",
+                        padding: "6px 12px",
+                        fontSize: "12px",
+                        borderRadius: "999px",
+                        border: "1px solid #4b5563",
+                        cursor: "pointer",
+                        backgroundColor: "transparent",
+                        color: "#e5e7eb",
                       }}
-                    />
-                    <div
-                      style={{
-                        width: "70%",
-                        height: "14px",
-                        borderRadius: "8px",
-                        backgroundColor: "#1f2937",
-                      }}
-                    />
+                    >
+                      로그아웃
+                    </button>
                   </div>
-                ))}
-              </div>
-            ) : (
+                </div>
+              ) : (
+                <div style={{ height: 1 }} />
+              )}
+            </div>
+          </div>
+
+          {/* 로그인 상태: 3개 세션 카드 */}
+          {!isUserLoading && user && (
+            <div style={{ width: "100%", marginTop: "8px" }}>
               <div
                 style={{
                   display: "flex",
-                  gap: "12px",
-                  flexDirection: isNarrow ? "column" : "row",
-                  flexWrap: isNarrow ? "nowrap" : "wrap",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  marginBottom: "8px",
                 }}
               >
-                {slots.map(({ slot, session }) => {
-                  const isDeleting =
-                    !!(session && deletingSessionId === session.id);
+                <h2 style={{ color: "#f9fafb", fontSize: "18px", margin: 0 }}>
+                  나의 대화 세션
+                </h2>
+                {isLoadingSessions && (
+                  <span style={{ color: "#9ca3af", fontSize: "12px" }}>
+                    세션을 불러오는 중...
+                  </span>
+                )}
+              </div>
 
-                  return (
+              {!isSlotsReady ? (
+                <div
+                  style={{
+                    display: "flex",
+                    gap: "12px",
+                    flexDirection: isNarrow ? "column" : "row",
+                    flexWrap: isNarrow ? "nowrap" : "wrap",
+                  }}
+                >
+                  {[1, 2, 3].map((slot) => (
                     <div
                       key={slot}
                       style={{
@@ -559,118 +529,315 @@ export default function Home() {
                         boxShadow: "0 6px 18px rgba(0,0,0,0.4)",
                         display: "flex",
                         flexDirection: "column",
-                        justifyContent: "space-between",
                         gap: "8px",
                       }}
                     >
-                      <div>
-                        <div
-                          style={{
-                            display: "flex",
-                            justifyContent: "space-between",
-                            alignItems: "center",
-                            marginBottom: "6px",
-                          }}
-                        >
-                          <span
-                            style={{
-                              fontSize: "13px",
-                              color: "#9ca3af",
-                            }}
-                          >
-                            세션 {slot}
-                          </span>
-                          {session && (
-                            <span
-                              style={{
-                                fontSize: "11px",
-                                color: "#6b7280",
-                              }}
-                            >
-                              최근 사용:{" "}
-                              {new Date(
-                                session.created_at
-                              ).toLocaleDateString("ko-KR")}
-                            </span>
-                          )}
-                        </div>
-
-                        <div
-                          style={{
-                            fontSize: "15px",
-                            color: "#f9fafb",
-                            fontWeight: 500,
-                            marginBottom: "4px",
-                            minHeight: "22px",
-                          }}
-                        >
-                          {languageTitle(session)}
-                        </div>
-
-                        <div
-                          style={{
-                            fontSize: "12px",
-                            color: "#9ca3af",
-                            minHeight: "18px",
-                          }}
-                        >
-                          {formatConfigLabel(session)}
-                        </div>
-                      </div>
-
                       <div
                         style={{
-                          marginTop: "8px",
+                          width: "50%",
+                          height: "14px",
+                          borderRadius: "999px",
+                          backgroundColor: "#1f2937",
+                        }}
+                      />
+                      <div
+                        style={{
+                          width: "80%",
+                          height: "18px",
+                          borderRadius: "8px",
+                          backgroundColor: "#1f2937",
+                        }}
+                      />
+                      <div
+                        style={{
+                          width: "70%",
+                          height: "14px",
+                          borderRadius: "8px",
+                          backgroundColor: "#1f2937",
+                        }}
+                      />
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div
+                  style={{
+                    display: "flex",
+                    gap: "12px",
+                    flexDirection: isNarrow ? "column" : "row",
+                    flexWrap: isNarrow ? "nowrap" : "wrap",
+                  }}
+                >
+                  {slots.map(({ slot, session }) => {
+                    const isDeleting = !!(session && deletingSessionId === session.id);
+
+                    return (
+                      <div
+                        key={slot}
+                        style={{
+                          ...getCardLayoutStyle(),
+                          backgroundColor: "#111827",
+                          borderRadius: "16px",
+                          padding: "16px",
+                          border: "1px solid #1f2937",
+                          boxShadow: "0 6px 18px rgba(0,0,0,0.4)",
                           display: "flex",
+                          flexDirection: "column",
                           justifyContent: "space-between",
-                          alignItems: "center",
                           gap: "8px",
                         }}
                       >
-                        <button
-                          onClick={() => handleCardClick(slot, session)}
-                          style={{
-                            flex: 1,
-                            padding: "10px 0",
-                            borderRadius: "999px",
-                            border: "none",
-                            cursor: "pointer",
-                            backgroundColor: session ? "#2563eb" : "#22c55e",
-                            color: "#f9fafb",
-                            fontSize: "14px",
-                            fontWeight: 500,
-                          }}
-                        >
-                          {session ? "대화 이어하기" : "대화 시작하기"}
-                        </button>
-
-                        {session && (
-                          <button
-                            onClick={() => handleDeleteSession(session)}
-                            disabled={isDeleting}
+                        <div>
+                          <div
                             style={{
-                              padding: "6px 10px",
-                              borderRadius: "999px",
-                              border: "1px solid #4b5563",
-                              backgroundColor: "transparent",
-                              color: "#fca5a5",
-                              fontSize: "11px",
-                              cursor: isDeleting ? "not-allowed" : "pointer",
-                              whiteSpace: "nowrap",
+                              display: "flex",
+                              justifyContent: "space-between",
+                              alignItems: "center",
+                              marginBottom: "6px",
                             }}
                           >
-                            {isDeleting ? "삭제 중..." : "이 세션 삭제"}
+                            <span style={{ fontSize: "13px", color: "#9ca3af" }}>
+                              세션 {slot}
+                            </span>
+                            {session && (
+                              <span style={{ fontSize: "11px", color: "#6b7280" }}>
+                                최근 사용:{" "}
+                                {new Date(session.created_at).toLocaleDateString("ko-KR")}
+                              </span>
+                            )}
+                          </div>
+
+                          <div
+                            style={{
+                              fontSize: "15px",
+                              color: "#f9fafb",
+                              fontWeight: 500,
+                              marginBottom: "4px",
+                              minHeight: "22px",
+                            }}
+                          >
+                            {languageTitle(session)}
+                          </div>
+
+                          <div style={{ fontSize: "12px", color: "#9ca3af", minHeight: "18px" }}>
+                            {formatConfigLabel(session)}
+                          </div>
+                        </div>
+
+                        <div
+                          style={{
+                            marginTop: "8px",
+                            display: "flex",
+                            justifyContent: "space-between",
+                            alignItems: "center",
+                            gap: "8px",
+                          }}
+                        >
+                          <button
+                            onClick={() => handleCardClick(slot, session)}
+                            style={{
+                              flex: 1,
+                              padding: "10px 0",
+                              borderRadius: "999px",
+                              border: "none",
+                              cursor: "pointer",
+                              backgroundColor: session ? "#2563eb" : "#22c55e",
+                              color: "#f9fafb",
+                              fontSize: "14px",
+                              fontWeight: 500,
+                            }}
+                          >
+                            {session ? "대화 이어하기" : "대화 시작하기"}
                           </button>
-                        )}
+
+                          {session && (
+                            <button
+                              onClick={() => handleDeleteSession(session)}
+                              disabled={isDeleting}
+                              style={{
+                                padding: "6px 10px",
+                                borderRadius: "999px",
+                                border: "1px solid #4b5563",
+                                backgroundColor: "transparent",
+                                color: "#fca5a5",
+                                fontSize: "11px",
+                                cursor: isDeleting ? "not-allowed" : "pointer",
+                                whiteSpace: "nowrap",
+                              }}
+                            >
+                              {isDeleting ? "삭제 중..." : "이 세션 삭제"}
+                            </button>
+                          )}
+                        </div>
                       </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ✅ 설정 모달 (설정 목록 / 회원탈퇴 상세) */}
+          {isSettingsOpen && (
+            <div
+              onClick={closeSettings}
+              style={{
+                position: "fixed",
+                inset: 0,
+                backgroundColor: "rgba(0,0,0,0.6)",
+                display: "flex",
+                justifyContent: "center",
+                alignItems: "center",
+                padding: "16px",
+                zIndex: 50,
+              }}
+            >
+              <div
+                onClick={(e) => e.stopPropagation()}
+                style={{
+                  width: "100%",
+                  maxWidth: "520px",
+                  backgroundColor: "#0b1220",
+                  border: "1px solid #1f2937",
+                  borderRadius: "16px",
+                  padding: "16px",
+                  boxShadow: "0 10px 30px rgba(0,0,0,0.6)",
+                  color: "#e5e7eb",
+                }}
+              >
+                {/* 헤더 */}
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    marginBottom: "12px",
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    {isWithdrawalOpen && (
+                      <button
+                        onClick={backToSettingsRoot}
+                        style={{
+                          border: "1px solid #374151",
+                          backgroundColor: "transparent",
+                          color: "#e5e7eb",
+                          borderRadius: "999px",
+                          padding: "6px 10px",
+                          cursor: "pointer",
+                          fontSize: "12px",
+                        }}
+                      >
+                        ←
+                      </button>
+                    )}
+                    <div style={{ fontWeight: 700, fontSize: "16px" }}>설정</div>
+                  </div>
+
+                  <button
+                    onClick={closeSettings}
+                    style={{
+                      border: "1px solid #374151",
+                      backgroundColor: "transparent",
+                      color: "#e5e7eb",
+                      borderRadius: "999px",
+                      padding: "6px 10px",
+                      cursor: "pointer",
+                      fontSize: "12px",
+                    }}
+                  >
+                    닫기
+                  </button>
+                </div>
+
+                {/* ✅ 설정 루트: "회원탈퇴" 항목만 보여주고, 클릭 시 상세로 */}
+                {!isWithdrawalOpen ? (
+                  <div style={{ borderTop: "1px solid #1f2937", paddingTop: "12px" }}>
+                    <button
+                      onClick={openWithdrawal}
+                      style={{
+                        width: "100%",
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        padding: "14px 12px",
+                        borderRadius: "12px",
+                        border: "1px solid #1f2937",
+                        backgroundColor: "rgba(255,255,255,0.02)",
+                        color: "#e5e7eb",
+                        cursor: "pointer",
+                        fontSize: "14px",
+                      }}
+                    >
+                      <span style={{ fontWeight: 700 }}>회원탈퇴</span>
+                      <span style={{ color: "#9ca3af" }}>›</span>
+                    </button>
+                  </div>
+                ) : (
+                  /* ✅ 회원탈퇴 상세 화면 */
+                  <div style={{ borderTop: "1px solid #1f2937", paddingTop: "12px" }}>
+                    <div style={{ fontWeight: 700, marginBottom: "8px" }}>회원탈퇴</div>
+
+                    <div style={{ color: "#fca5a5", fontSize: "13px", lineHeight: 1.5 }}>
+                      탈퇴 즉시 모든 정보가 삭제되며 복구가 불가합니다. 그래도 탈퇴하시겠습니까
                     </div>
-                  );
-                })}
+
+                    <label
+                      style={{
+                        display: "flex",
+                        gap: 8,
+                        alignItems: "center",
+                        marginTop: 12,
+                        fontSize: "13px",
+                        color: "#e5e7eb",
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={deleteChecked}
+                        onChange={(e) => setDeleteChecked(e.target.checked)}
+                        disabled={isDeletingAccount}
+                      />
+                      <span>위 내용을 확인했으며, 탈퇴에 동의합니다.</span>
+                    </label>
+
+                    {deleteAccountError && (
+                      <div style={{ marginTop: 10, color: "#fca5a5", fontSize: "12px" }}>
+                        {deleteAccountError}
+                      </div>
+                    )}
+
+                    <button
+                      onClick={handleDeleteAccount}
+                      disabled={!deleteChecked || isDeletingAccount}
+                      style={{
+                        width: "100%",
+                        marginTop: "12px",
+                        padding: "10px 12px",
+                        borderRadius: "12px",
+                        border: "1px solid #7f1d1d",
+                        backgroundColor: "#991b1b",
+                        color: "#fff",
+                        cursor:
+                          !deleteChecked || isDeletingAccount ? "not-allowed" : "pointer",
+                        opacity: !deleteChecked || isDeletingAccount ? 0.55 : 1,
+                        fontSize: "14px",
+                        fontWeight: 700,
+                      }}
+                    >
+                      {isDeletingAccount ? "탈퇴 처리중..." : "회원탈퇴"}
+                    </button>
+
+                    <div style={{ marginTop: 10, color: "#9ca3af", fontSize: "12px" }}>
+                      * 탈퇴 시 저장된 모든 정보가 삭제됩니다.
+                    </div>
+                  </div>
+                )}
               </div>
-            )}
-          </div>
-        )}
-      </div>
+            </div>
+          )}
+        </div>
+      )}
     </main>
   );
 }
