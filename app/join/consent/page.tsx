@@ -232,17 +232,6 @@ export default function ConsentPage() {
         >
           {saving ? "저장 중..." : "동의하고 시작하기"}
         </button>
-
-        <div style={{ marginTop: 16, fontSize: 12, color: "#9ca3af" }}>
-          문의:{" "}
-          <a
-            href="mailto:product.haram@gmail.com"
-            style={{ color: "#e5e7eb", textDecoration: "underline" }}
-          >
-            product.haram@gmail.com
-          </a>{" "}
-          (실시간 상담 아님)
-        </div>
       </div>
 
       {openDoc && (
