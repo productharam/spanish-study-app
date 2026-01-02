@@ -7,23 +7,15 @@ export async function POST(req: Request) {
     const body = await req.json();
     const { greeting, language, level, personaType } = body;
 
-    if (!greeting) {
-      return NextResponse.json(
-        { error: "greeting is required" },
-        { status: 400 }
-      );
+    if (!greeting || typeof greeting !== "string") {
+      return NextResponse.json({ ok: false, error: "greeting is required" }, { status: 400 });
     }
 
-    const authHeader = req.headers.get("Authorization");
-    const token = authHeader?.startsWith("Bearer ")
-      ? authHeader.slice(7)
-      : undefined;
+    const authHeader = req.headers.get("Authorization") || req.headers.get("authorization");
+    const token = authHeader?.startsWith("Bearer ") ? authHeader.slice(7).trim() : undefined;
 
     if (!token) {
-      return NextResponse.json(
-        { error: "Missing access token" },
-        { status: 401 }
-      );
+      return NextResponse.json({ ok: false, error: "Missing access token" }, { status: 401 });
     }
 
     const {
@@ -32,57 +24,52 @@ export async function POST(req: Request) {
     } = await supabaseServer.auth.getUser(token);
 
     if (authError || !user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
     }
 
     const userId = user.id;
-    const title = greeting.substring(0, 20) + "...";
 
     const lang = language ?? "es";
     const lvl = level ?? "beginner";
     const persona = personaType ?? "friend";
 
+    const title = greeting.trim().slice(0, 20) + (greeting.trim().length > 20 ? "..." : "");
+
+    // 1) 세션 생성
     const { data: sessionData, error: sessionError } = await supabaseServer
       .from("chat_sessions")
       .insert({
-  user_id: userId,
-  title,
-  language_code: lang,
-  level_code: lvl,
-  persona_code: persona,
-})
+        user_id: userId,
+        title,
+        language_code: lang,
+        level_code: lvl,
+        persona_code: persona,
+      })
       .select()
       .single();
 
     if (sessionError || !sessionData) {
       return NextResponse.json(
-        { error: sessionError?.message || "Failed to create session" },
+        { ok: false, error: sessionError?.message || "Failed to create session" },
         { status: 500 }
       );
     }
 
-    const { error: msgError } = await supabaseServer
-      .from("chat_messages")
-      .insert({
-  user_id: userId,
-  title,
-  language_code: lang,
-  level_code: lvl,
-  persona_code: persona,
-})
+    // 2) greeting을 첫 assistant 메시지로 저장
+    const { error: msgError } = await supabaseServer.from("chat_messages").insert({
+      session_id: sessionData.id,
+      user_id: userId,
+      role: "assistant",
+      content: greeting.trim(),
+      details: null,
+    });
 
     if (msgError) {
-      return NextResponse.json({ error: msgError.message }, { status: 500 });
+      return NextResponse.json({ ok: false, error: msgError.message }, { status: 500 });
     }
 
-    return NextResponse.json({
-      ok: true,
-      sessionId: sessionData.id,
-    });
+    return NextResponse.json({ ok: true, sessionId: sessionData.id }, { status: 200 });
   } catch (e: any) {
-    return NextResponse.json(
-      { error: e?.message ?? "Unknown error" },
-      { status: 500 }
-    );
+    return NextResponse.json({ ok: false, error: e?.message ?? "Unknown error" }, { status: 500 });
   }
 }

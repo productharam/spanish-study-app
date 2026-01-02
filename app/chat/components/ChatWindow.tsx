@@ -1,6 +1,7 @@
 // app/chat/components/ChatWindow.tsx
 "use client";
 
+import type React from "react";
 import { useEffect, useState, useRef, KeyboardEvent } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
@@ -109,6 +110,10 @@ export default function ChatWindow() {
   const [selectedPersona, setSelectedPersona] = useState<string | null>(null);
   const [isCreatingConfiguredSession, setIsCreatingConfiguredSession] = useState(false);
 
+  // ✅ (추가) 마지막 메시지 수정 UX 상태
+  const [isEditing, setIsEditing] = useState(false);
+  const [editingTargetDbId, setEditingTargetDbId] = useState<string | null>(null);
+
   // ✅ messageKey: dbId 우선 (TTS/학습/캐시의 핵심 키)
   const getMessageKey = (m: ChatMessage) => m.dbId ?? m.id;
 
@@ -208,6 +213,16 @@ export default function ChatWindow() {
           // 프로필/권한
           setTtsEnabled(false);
 
+          // ✅ 게스트도 위저드부터
+          setWizardStep(1);
+          setSelectedLanguage(null);
+          setSelectedLevel(null);
+          setSelectedPersona(null);
+
+          // ✅ 수정모드 초기화
+          setIsEditing(false);
+          setEditingTargetDbId(null);
+
           // ✅ 새 시작은 auto-scroll ON
           shouldAutoScrollRef.current = true;
           return;
@@ -224,6 +239,16 @@ export default function ChatWindow() {
           setMessages([]);
           setHasStarted(false);
 
+          // ✅ (권장) 기존 세션은 로딩 후 세팅될 거지만, 일단 안전하게 초기화
+          setSelectedLanguage(null);
+          setSelectedLevel(null);
+          setSelectedPersona(null);
+          setWizardStep(1);
+
+          // ✅ 수정모드 초기화
+          setIsEditing(false);
+          setEditingTargetDbId(null);
+
           // ✅ 이어하기는 무조건 마지막으로
           shouldAutoScrollRef.current = true;
         } else if (newParam === "1" && slotParam) {
@@ -235,6 +260,15 @@ export default function ChatWindow() {
             setSessionId(null);
             setMessages([]);
             setHasStarted(false);
+
+            setWizardStep(1);
+            setSelectedLanguage(null);
+            setSelectedLevel(null);
+            setSelectedPersona(null);
+
+            // ✅ 수정모드 초기화
+            setIsEditing(false);
+            setEditingTargetDbId(null);
 
             // ✅ 새 시작은 auto-scroll ON
             shouldAutoScrollRef.current = true;
@@ -363,6 +397,7 @@ export default function ChatWindow() {
 
   /**
    * ✅ 기존 세션 이어가기 모드: /api/session/messages 로 메시지 로드
+   * ✅ (권장 반영) session의 language/level/persona 를 selected* 에 반영
    */
   useEffect(() => {
     const loadExistingSession = async () => {
@@ -403,7 +438,13 @@ export default function ChatWindow() {
           return;
         }
 
+        // ✅ 세션 id 확정
         setSessionId(session.id);
+
+        // ✅✅ (권장) 기존 세션 설정을 ChatWindow state에도 반영
+        setSelectedLanguage((session.language_code ?? null) as string | null);
+        setSelectedLevel((session.level_code ?? null) as string | null);
+        setSelectedPersona((session.persona_code ?? null) as string | null);
 
         const restored: ChatMessage[] = rows.map((m: any) => ({
           id: makeId(),
@@ -419,6 +460,10 @@ export default function ChatWindow() {
 
         setMessages(restored);
         setHasStarted(true);
+
+        // ✅ 로딩 완료 시 수정모드도 꺼둠
+        setIsEditing(false);
+        setEditingTargetDbId(null);
       } catch (e) {
         console.error("loadExistingSession error:", e);
         setMessagesError("대화 내역을 불러오는 중 오류가 발생했어요.");
@@ -728,6 +773,20 @@ export default function ChatWindow() {
     }, typingSpeed);
   };
 
+  const stopAllAudio = () => {
+    if (currentAudioRef.current) {
+      currentAudioRef.current.pause();
+      currentAudioRef.current.currentTime = 0;
+      currentAudioRef.current = null;
+    }
+    setPlayingMessageKey(null);
+  };
+
+  const clearAudioCache = () => {
+    audioCacheRef.current.forEach((url) => URL.revokeObjectURL(url));
+    audioCacheRef.current.clear();
+  };
+
   const handleNewChatLocalReset = () => {
     setMessages([]);
     setSessionId(null);
@@ -737,10 +796,22 @@ export default function ChatWindow() {
     setStudyState({});
     setActiveStudyKey(null);
 
+    // 설정 초기화
+    setWizardStep(1);
+    setSelectedLanguage(null);
+    setSelectedLevel(null);
+    setSelectedPersona(null);
+
+    // 수정모드 초기화
+    setIsEditing(false);
+    setEditingTargetDbId(null);
+    setInput("");
+
     shouldAutoScrollRef.current = true;
 
-    audioCacheRef.current.forEach((url) => URL.revokeObjectURL(url));
-    audioCacheRef.current.clear();
+    if (typingIntervalRef.current) clearInterval(typingIntervalRef.current);
+    stopAllAudio();
+    clearAudioCache();
   };
 
   const handleDeleteCurrentSession = async () => {
@@ -922,6 +993,11 @@ export default function ChatWindow() {
         startTypewriter(formattedGreeting);
         setHasStarted(true);
         setSessionId(null);
+
+        // 게스트: 수정모드 OFF
+        setIsEditing(false);
+        setEditingTargetDbId(null);
+
         return;
       }
 
@@ -959,6 +1035,10 @@ export default function ChatWindow() {
       startTypewriter(formattedGreeting);
       setHasStarted(true);
       setChatFlow("existingSession");
+
+      // 수정모드 OFF
+      setIsEditing(false);
+      setEditingTargetDbId(null);
     } catch (e) {
       console.error("handleStartConfiguredConversation error:", e);
       alert("처음 인사를 불러오는 데 문제가 생겼어요 🥲");
@@ -967,10 +1047,132 @@ export default function ChatWindow() {
     }
   };
 
+  // ✅ 마지막 메시지 수정 시작/취소
+  const startEditLastUser = () => {
+    if (isGuest) return;
+    if (!hasStarted) return;
+    if (isSending) return;
+
+    const last = messages[messages.length - 1];
+    if (!last || last.role !== "user") return;
+    if (!last.dbId) {
+      alert("아직 메시지 저장이 완료되지 않았어요. 잠시 후 다시 시도해 주세요.");
+      return;
+    }
+
+    setIsEditing(true);
+    setEditingTargetDbId(last.dbId);
+    setInput(last.content);
+    shouldAutoScrollRef.current = true;
+  };
+
+  const cancelEdit = () => {
+    setIsEditing(false);
+    setEditingTargetDbId(null);
+    setInput("");
+  };
+
+  const canEditLastUser =
+    !isGuest &&
+    hasStarted &&
+    !isSending &&
+    messages.length > 0 &&
+    messages[messages.length - 1].role === "user" &&
+    !!messages[messages.length - 1].dbId;
+
+  // ✅ rewrite API 호출
+  const rewriteLastUser = async (newContent: string) => {
+    if (isGuest) return;
+    if (!sessionId) {
+      alert("세션 정보가 없어 수정할 수 없어요 🥲");
+      return;
+    }
+    if (!editingTargetDbId) {
+      alert("수정 대상 메시지를 찾을 수 없어요 🥲");
+      return;
+    }
+
+    // 타자/오디오/캐시/확장 상태 정리
+    if (typingIntervalRef.current) clearInterval(typingIntervalRef.current);
+    stopAllAudio();
+    clearAudioCache();
+    setExpandedMessageIds([]);
+    setStudyState({});
+    setActiveStudyKey(null);
+    setIsStudyModalOpen(false);
+
+    const accessToken = await getAccessToken();
+    if (!accessToken) {
+      alert("로그인이 필요해요 🙂");
+      return;
+    }
+
+    const res = await fetch("/api/rewrite", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({
+        sessionId,
+        targetMessageId: editingTargetDbId,
+        newContent,
+      }),
+    });
+
+    const data = await res.json().catch(() => null);
+
+    if (!res.ok || !data?.ok) {
+      console.error("rewrite error:", data);
+      const err = data?.error ?? "REWRITE_FAILED";
+      if (err === "ONLY_LAST_USER_MESSAGE_CAN_BE_REWRITTEN") {
+        alert("마지막 내 메시지만 수정할 수 있어요.");
+      } else {
+        alert("메시지 수정에 실패했어요 🥲");
+      }
+      return;
+    }
+
+    const rows = data.messages ?? [];
+
+    const restored: ChatMessage[] = rows.map((m: any) => ({
+      id: makeId(),
+      dbId: m.id,
+      role: m.role,
+      content: m.content,
+      details: m.details ?? undefined,
+      isDetailsLoading: false,
+      detailsError: false,
+    }));
+
+    shouldAutoScrollRef.current = true;
+    setMessages(restored);
+
+    // 수정모드 종료
+    setIsEditing(false);
+    setEditingTargetDbId(null);
+    setInput("");
+  };
+
   // 메시지 보내기
   const handleSend = async () => {
     if (!hasStarted) return;
     if (!input.trim() || isSending) return;
+
+    // ✅ 수정모드면 rewrite로 처리 (타임라인 다시쓰기)
+    if (isEditing) {
+      const trimmed = input.trim();
+      setIsSending(true);
+      try {
+        await rewriteLastUser(trimmed);
+      } catch (e) {
+        console.error("rewrite exception:", e);
+        alert("메시지 수정 중 오류가 발생했어요 🥲");
+      } finally {
+        setIsSending(false);
+      }
+      return;
+    }
 
     // ✅ 게스트 체험: 최대 5회
     if (isGuest && guestTrialCount >= 5) {
@@ -1785,24 +1987,81 @@ export default function ChatWindow() {
           <div style={{ borderTop: "1px solid #333", paddingTop: "8px" }}>
             {hasStarted ? (
               <>
-                <textarea
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  onKeyDown={handleKeyDown}
-                  placeholder="(Enter: 전송, Shift+Enter: 줄바꿈)"
-                  style={{
-                    width: "100%",
-                    height: "70px",
-                    resize: "none",
-                    backgroundColor: "#111",
-                    color: "white",
-                    borderRadius: "8px",
-                    border: "1px solid #333",
-                    padding: "8px",
-                    marginBottom: "8px",
-                    fontSize: "13px",
-                  }}
-                />
+                {/* ✅ 수정모드 배지 */}
+                {isEditing && (
+                  <div
+                    style={{
+                      marginBottom: "8px",
+                      border: "1px solid #374151",
+                      backgroundColor: "#0b1220",
+                      borderRadius: "10px",
+                      padding: "8px 10px",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      gap: "10px",
+                    }}
+                  >
+                    <div style={{ fontSize: "12px", color: "#e5e7eb" }}>메시지 수정 중</div>
+                    <button
+                      type="button"
+                      onClick={cancelEdit}
+                      style={{
+                        fontSize: "12px",
+                        padding: "6px 10px",
+                        borderRadius: "999px",
+                        border: "1px solid #4b5563",
+                        backgroundColor: "transparent",
+                        color: "#e5e7eb",
+                        cursor: "pointer",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      취소
+                    </button>
+                  </div>
+                )}
+
+                {/* ✅ ✏️ + 입력창 */}
+                <div style={{ display: "flex", gap: "8px", alignItems: "stretch", marginBottom: "8px" }}>
+                  {canEditLastUser && !isEditing && (
+                    <button
+                      type="button"
+                      onClick={startEditLastUser}
+                      style={{
+                        width: "42px",
+                        borderRadius: "8px",
+                        border: "1px solid #333",
+                        backgroundColor: "#111",
+                        color: "white",
+                        cursor: "pointer",
+                        fontSize: "16px",
+                      }}
+                      aria-label="마지막 내 메시지 수정"
+                      title="마지막 내 메시지 수정"
+                    >
+                      ✏️
+                    </button>
+                  )}
+
+                  <textarea
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)}
+                    onKeyDown={handleKeyDown}
+                    placeholder={isEditing ? "수정할 내용을 입력하세요. (Enter: 전송)" : "(Enter: 전송, Shift+Enter: 줄바꿈)"}
+                    style={{
+                      width: "100%",
+                      height: "70px",
+                      resize: "none",
+                      backgroundColor: "#111",
+                      color: "white",
+                      borderRadius: "8px",
+                      border: "1px solid #333",
+                      padding: "8px",
+                      fontSize: "13px",
+                    }}
+                  />
+                </div>
 
                 <button
                   onClick={handleSend}
@@ -1813,13 +2072,13 @@ export default function ChatWindow() {
                     borderRadius: "8px",
                     border: "none",
                     cursor: isSending ? "not-allowed" : "pointer",
-                    backgroundColor: isSending ? "#555" : "#2563eb",
+                    backgroundColor: isSending ? "#555" : isEditing ? "#22c55e" : "#2563eb",
                     color: "white",
                     fontSize: "14px",
                     fontWeight: 500,
                   }}
                 >
-                  {isSending ? "답변 기다리는 중..." : "보내기"}
+                  {isSending ? "처리 중..." : isEditing ? "수정해서 다시 보내기" : "보내기"}
                 </button>
               </>
             ) : (
