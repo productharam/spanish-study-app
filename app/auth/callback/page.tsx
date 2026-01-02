@@ -12,15 +12,25 @@ export default function AuthCallbackPage() {
   const router = useRouter();
 
   useEffect(() => {
-    const handleAuth = async () => {
+    const run = async () => {
       try {
-        // 1) Supabase가 URL 해시(#access_token=...)를 읽어 세션 세팅
-        const { data: sessionRes, error: sessionErr } =
-          await supabase.auth.getSession();
+        // 0) PKCE(code) 콜백 대응: code가 있으면 세션 교환
+        const url = new URL(window.location.href);
+        const code = url.searchParams.get("code");
+        if (code) {
+          const { error } = await supabase.auth.exchangeCodeForSession(code);
+          if (error) throw error;
 
-        if (sessionErr) throw sessionErr;
+          // code 파라미터 제거 (깔끔 + 중복 교환 방지)
+          url.searchParams.delete("code");
+          window.history.replaceState({}, document.title, url.toString());
+        }
 
-        const user = sessionRes.session?.user;
+        // 1) 유저 확인 (getSession보다 getUser가 더 안정적인 편)
+        const { data: userRes, error: userErr } = await supabase.auth.getUser();
+        if (userErr) throw userErr;
+
+        const user = userRes.user;
         if (!user) {
           router.replace("/login");
           return;
@@ -34,7 +44,6 @@ export default function AuthCallbackPage() {
           .maybeSingle();
 
         if (consentErr) {
-          // 조회 오류가 나면 안전하게 로그인 화면으로(또는 에러 페이지)
           console.error("Consent check error:", consentErr);
           router.replace("/login");
           return;
@@ -47,18 +56,14 @@ export default function AuthCallbackPage() {
           consent.collection_version === COLLECTION_VERSION;
 
         // 3) 분기
-        if (!isAccepted) {
-          router.replace("/join/consent");
-        } else {
-          router.replace("/");
-        }
+        router.replace(isAccepted ? "/" : "/join/consent");
       } catch (e) {
         console.error("Auth callback error:", e);
         router.replace("/login");
       }
     };
 
-    handleAuth();
+    run();
   }, [router]);
 
   return <p>로그인 처리 중입니다...</p>;

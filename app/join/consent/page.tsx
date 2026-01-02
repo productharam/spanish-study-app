@@ -67,8 +67,8 @@ export default function ConsentPage() {
 2) 생성형 AI의 특성상 응답의 정확성·완전성·최신성을 보장하지 않으며, 이용자는 참고 목적 범위에서 서비스를 이용해야 합니다.
 
 제6조(문의)
-문의는 서비스 메인 페이지 하단에 기재된 이메일로 접수합니다. (실시간 상담 아님)
-- 문의: product.haram@gmail.com
+문의는 서비스 메인 페이지 하단에 기재된 이메일로 접수합니다.
+- 문의: product.haram@gmail.com (실시간 상담 아님)
 `;
 
     const privacy = `개인정보처리방침 (v${PRIVACY_VERSION})
@@ -94,7 +94,7 @@ export default function ConsentPage() {
 - 인증/DB/스토리지: Supabase
 - 소셜 로그인: Google OAuth
 - AI 응답 생성: OpenAI
-- (사용 시) 음성 변환(TTS): 제3자 음성 합성 서비스 제공자
+- (사용 시) 음성 생성: 음성 생성 서비스 제공자
 
 5. 보유 및 이용기간
 - 원칙적으로 회원 탈퇴 시 지체 없이 파기합니다.
@@ -103,7 +103,7 @@ export default function ConsentPage() {
 6. 이용자의 권리
 이용자는 개인정보 열람, 정정, 삭제, 처리정지 등을 요구할 수 있으며, 회원 탈퇴를 통해 개인정보 처리 중단 및 삭제를 요청할 수 있습니다.
 
-7. 문의처
+7. 문의
 - 문의: product.haram@gmail.com (실시간 상담 아님)
 `;
 
@@ -210,7 +210,7 @@ export default function ConsentPage() {
         <ConsentRow
           checked={agreeCollection}
           onChange={setAgreeCollection}
-          label="[필수] 개인정보 수집·이용 동의(가입/계정관리)"
+          label="[필수] 개인정보 수집·이용 동의"
           onOpen={() => setOpenDoc("collection")}
         />
 
