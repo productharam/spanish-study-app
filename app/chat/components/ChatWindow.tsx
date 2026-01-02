@@ -965,7 +965,7 @@ export default function ChatWindow() {
     if (!hasStarted) return;
     if (!input.trim() || isSending) return;
 
-    if (isGuest && guestTrialCount >= 1) {
+    if (isGuest && guestTrialCount >= 2) {
       setShowLoginModal(true);
       return;
     }
@@ -1912,9 +1912,9 @@ export default function ChatWindow() {
             <p style={{ color: "#9ca3af", fontSize: "14px", marginBottom: "16px" }}>
               지금은 체험 모드라 대화를
               <br />
-              최대 2회까지만 사용할 수 있어요.
+              최대 5번까지 주고받을 수 있어요.
               <br />
-              계속 사용하려면 Google 로그인이 필요해요.
+              계속 사용하려면 로그인이 필요해요.
             </p>
 
             <button
