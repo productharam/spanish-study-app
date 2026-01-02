@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 
 const TERMS_VERSION = "2025-12-30";
@@ -10,61 +10,99 @@ const COLLECTION_VERSION = "2025-12-30";
 
 export default function AuthCallbackPage() {
   const router = useRouter();
+  const sp = useSearchParams();
+
+  const [status, setStatus] = useState<string>("로그인 처리 중...");
 
   useEffect(() => {
     const run = async () => {
       try {
-        // 0) PKCE(code) 콜백 대응: code가 있으면 세션 교환
-        const url = new URL(window.location.href);
-        const code = url.searchParams.get("code");
-        if (code) {
-          const { error } = await supabase.auth.exchangeCodeForSession(code);
-          if (error) throw error;
+        // 1) code 파라미터 확인 (PKCE)
+        const code = sp.get("code");
+        const errorDesc = sp.get("error_description");
+        const error = sp.get("error");
 
-          // code 파라미터 제거 (깔끔 + 중복 교환 방지)
-          url.searchParams.delete("code");
-          window.history.replaceState({}, document.title, url.toString());
+        if (error || errorDesc) {
+          console.error("OAuth error:", { error, errorDesc });
+          router.replace("/login");
+          return;
         }
 
-        // 1) 유저 확인 (getSession보다 getUser가 더 안정적인 편)
-        const { data: userRes, error: userErr } = await supabase.auth.getUser();
-        if (userErr) throw userErr;
+        if (!code) {
+          // 이미 세션이 있으면 그냥 진행
+          const { data: sess } = await supabase.auth.getSession();
+          if (!sess.session?.user) {
+            router.replace("/login");
+            return;
+          }
+        } else {
+          // 2) code -> session 교환
+          setStatus("세션 생성 중...");
+          const { data, error: exErr } = await supabase.auth.exchangeCodeForSession(code);
+          if (exErr) throw exErr;
 
-        const user = userRes.user;
+          if (!data.session?.user) {
+            router.replace("/login");
+            return;
+          }
+        }
+
+        // 3) 최신 약관 동의 여부 체크
+        setStatus("약관 동의 확인 중...");
+        const { data: u } = await supabase.auth.getUser();
+        const user = u.user;
         if (!user) {
           router.replace("/login");
           return;
         }
 
-        // 2) 동의 여부 조회
-        const { data: consent, error: consentErr } = await supabase
+        const { data: consent, error: cErr } = await supabase
           .from("user_consents")
           .select("terms_version, privacy_version, collection_version")
           .eq("user_id", user.id)
           .maybeSingle();
 
-        if (consentErr) {
-          console.error("Consent check error:", consentErr);
-          router.replace("/login");
-          return;
-        }
-
-        const isAccepted =
+        // consent row 없거나, 버전 불일치면 /join/consent
+        const ok =
           !!consent &&
           consent.terms_version === TERMS_VERSION &&
           consent.privacy_version === PRIVACY_VERSION &&
           consent.collection_version === COLLECTION_VERSION;
 
-        // 3) 분기
-        router.replace(isAccepted ? "/" : "/join/consent");
+        if (cErr) {
+          console.error("consent select error:", cErr);
+        }
+
+        if (!ok) {
+          router.replace(`/join/consent?next=${encodeURIComponent("/")}`);
+          return;
+        }
+
+        // 4) 정상: 홈으로
+        setStatus("완료! 이동 중...");
+        router.replace("/");
       } catch (e) {
-        console.error("Auth callback error:", e);
+        console.error("auth callback error:", e);
         router.replace("/login");
       }
     };
 
     run();
-  }, [router]);
+  }, [router, sp]);
 
-  return <p>로그인 처리 중입니다...</p>;
+  return (
+    <main
+      style={{
+        minHeight: "100vh",
+        display: "flex",
+        justifyContent: "center",
+        alignItems: "center",
+        backgroundColor: "#000",
+        color: "#e5e7eb",
+        padding: 16,
+      }}
+    >
+      <div style={{ fontSize: 14, color: "#9ca3af" }}>{status}</div>
+    </main>
+  );
 }

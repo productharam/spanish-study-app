@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 
 const TERMS_VERSION = "2025-12-30";
@@ -12,6 +12,9 @@ type DocKey = "terms" | "privacy" | "collection" | null;
 
 export default function ConsentPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+
+  const nextUrl = searchParams.get("next") || "/";
 
   const [userId, setUserId] = useState<string | null>(null);
   const [loadingUser, setLoadingUser] = useState(true);
@@ -141,7 +144,6 @@ export default function ConsentPage() {
 
     setSaving(true);
     try {
-      // upsert: 이미 레코드가 있으면 버전 업데이트 가능
       const { error } = await supabase.from("user_consents").upsert(
         {
           user_id: userId,
@@ -155,7 +157,7 @@ export default function ConsentPage() {
 
       if (error) throw error;
 
-      router.replace("/");
+      router.replace(nextUrl);
     } catch (e) {
       console.error("Save consent error:", e);
       alert("동의 저장 중 문제가 발생했어요. 잠시 후 다시 시도해주세요.");
@@ -188,9 +190,7 @@ export default function ConsentPage() {
           color: "#f9fafb",
         }}
       >
-        <h1 style={{ fontSize: 20, marginBottom: 10 }}>
-          가입을 위해 약관 동의가 필요해요
-        </h1>
+        <h1 style={{ fontSize: 20, marginBottom: 10 }}>가입을 위해 약관 동의가 필요해요</h1>
         <p style={{ fontSize: 13, color: "#9ca3af", marginBottom: 18 }}>
           아래 필수 약관에 동의하면 서비스 이용을 시작할 수 있어요.
         </p>
@@ -299,11 +299,7 @@ function ConsentRow(props: {
   );
 }
 
-function DocModal(props: {
-  title: string;
-  text: string;
-  onClose: () => void;
-}) {
+function DocModal(props: { title: string; text: string; onClose: () => void }) {
   const { title, text, onClose } = props;
 
   return (

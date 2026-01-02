@@ -5,6 +5,10 @@ import { useEffect, useState, useRef, KeyboardEvent } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 
+const TERMS_VERSION = "2025-12-30";
+const PRIVACY_VERSION = "2025-12-30";
+const COLLECTION_VERSION = "2025-12-30";
+
 type MessageDetails = {
   correction?: string; // 0. 스페인어 문장 교정 (내 말풍선 전용)
   ko: string; // 1. 한글 번역
@@ -28,8 +32,7 @@ type StudyCard = {
   cardId: string | null;
   korean: string;
   baseSpanish: string;
-  // ✅ 이 문장의 TTS를 저장/조회할 때 쓰는 안정 키 (가능하면 dbId)
-  ttsKey: string;
+  ttsKey: string; // ✅ (가능하면 dbId)
 };
 
 // ✅ studyState는 messageKey(=dbId 우선)로 관리
@@ -54,7 +57,6 @@ export default function ChatWindow() {
   const shouldAutoScrollRef = useRef(true);
 
   // TTS 관련
-  // ✅ 캐시는 "audioId(=sessionId/dbId)" 기준으로 저장해야 reload/복원에도 일관됨
   const audioCacheRef = useRef<Map<string, string>>(new Map());
   const [playingMessageKey, setPlayingMessageKey] = useState<string | null>(null);
   const currentAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -263,6 +265,57 @@ export default function ChatWindow() {
   }, [searchParams]);
 
   /**
+   * ✅ (추가) 동의 체크 useEffect (user/isGuest 세팅 이후)
+   * - 게스트 제외
+   * - user_consents가 없거나 버전 불일치면 /join/consent 로 이동
+   */
+  useEffect(() => {
+    const checkConsent = async () => {
+      // init 끝나기 전에는 대기
+      if (isInitialLoading) return;
+
+      // 게스트면 동의 체크 대상 아님
+      if (isGuest) return;
+
+      // 로그인 유저가 아니면(이론상) 그냥 종료
+      if (!user?.id) return;
+
+      try {
+        const { data: consent, error } = await supabase
+          .from("user_consents")
+          .select("terms_version, privacy_version, collection_version")
+          .eq("user_id", user.id)
+          .maybeSingle();
+
+        const ok =
+          !!consent &&
+          consent.terms_version === TERMS_VERSION &&
+          consent.privacy_version === PRIVACY_VERSION &&
+          consent.collection_version === COLLECTION_VERSION;
+
+        if (error) {
+          console.error("ChatWindow consent select error:", error);
+        }
+
+        if (!ok) {
+          // 현재 /chat 쿼리를 포함해서 돌아오게
+          const qs = typeof window !== "undefined" ? window.location.search : "";
+          const next = `/chat${qs}`;
+          router.replace(`/join/consent?next=${encodeURIComponent(next)}`);
+          return;
+        }
+      } catch (e) {
+        console.error("ChatWindow consent check exception:", e);
+        const qs = typeof window !== "undefined" ? window.location.search : "";
+        const next = `/chat${qs}`;
+        router.replace(`/join/consent?next=${encodeURIComponent(next)}`);
+      }
+    };
+
+    checkConsent();
+  }, [user, isGuest, isInitialLoading, router]);
+
+  /**
    * ✅ 로그인 사용자면 /api/profile 로드해서 ttsEnabled 반영
    */
   useEffect(() => {
@@ -310,13 +363,12 @@ export default function ChatWindow() {
 
   /**
    * ✅ 기존 세션 이어가기 모드: /api/session/messages 로 메시지 로드
-   *  - 예상 응답: { ok: true, session: {...}, messages: [...] }
    */
   useEffect(() => {
     const loadExistingSession = async () => {
       if (chatFlow !== "existingSession") return;
       if (!sessionId) return;
-      if (isGuest) return; // 게스트는 existingSession 사용 안 함
+      if (isGuest) return;
 
       setIsMessagesLoading(true);
       setMessagesError(null);
@@ -353,10 +405,9 @@ export default function ChatWindow() {
 
         setSessionId(session.id);
 
-        // ✅ 핵심: 프론트 id와 DB id를 분리해서 복원
         const restored: ChatMessage[] = rows.map((m: any) => ({
-          id: makeId(), // UI용
-          dbId: m.id, // ✅ DB chat_messages.id
+          id: makeId(),
+          dbId: m.id,
           role: m.role,
           content: m.content,
           details: m.details ?? undefined,
@@ -364,11 +415,10 @@ export default function ChatWindow() {
           detailsError: false,
         }));
 
-        // ✅ 이어하기는 무조건 마지막 위치로
         shouldAutoScrollRef.current = true;
 
         setMessages(restored);
-        setHasStarted(true); // 이미 대화 중인 세션
+        setHasStarted(true);
       } catch (e) {
         console.error("loadExistingSession error:", e);
         setMessagesError("대화 내역을 불러오는 중 오류가 발생했어요.");
@@ -485,9 +535,7 @@ export default function ChatWindow() {
         return prev.filter((x) => x !== id);
       } else {
         const next = [...prev, id];
-        if (!alreadyHasDetails) {
-          loadDetails(id, text);
-        }
+        if (!alreadyHasDetails) loadDetails(id, text);
         return next;
       }
     });
@@ -501,9 +549,7 @@ export default function ChatWindow() {
         return prev.filter((x) => x !== id);
       } else {
         const next = [...prev, id];
-        if (!alreadyHasDetails) {
-          loadUserDetails(id, text);
-        }
+        if (!alreadyHasDetails) loadUserDetails(id, text);
         return next;
       }
     });
@@ -517,13 +563,11 @@ export default function ChatWindow() {
         return;
       }
 
-      // ✅ 권한 없으면 출시요청 모달
       if (!ttsEnabled) {
         openLaunchRequestModal();
         return;
       }
 
-      // ✅ 안정 키 기반(가능하면 dbId)으로 재생 상태를 관리
       const messageKey = getMessageKey(message);
 
       if (playingMessageKey === messageKey && currentAudioRef.current) {
@@ -552,7 +596,6 @@ export default function ChatWindow() {
         return;
       }
 
-      // ✅ 캐시 hit
       if (audioCacheRef.current.has(audioId)) {
         const existingUrl = audioCacheRef.current.get(audioId)!;
         const audio = new Audio(existingUrl);
@@ -591,12 +634,10 @@ export default function ChatWindow() {
         }),
       });
 
-      // ✅ 권한/플랜 막힘이면 출시요청으로 유도
       if (res.status === 401 || res.status === 403) {
         const data = await res.json().catch(() => null);
         console.warn("TTS blocked:", data);
         setPlayingMessageKey(null);
-
         openLaunchRequestModal();
         return;
       }
@@ -609,7 +650,6 @@ export default function ChatWindow() {
 
       const data = await res.json();
       const url = data.url as string | undefined;
-
       if (!url) throw new Error("TTS URL이 응답에 없어요");
 
       audioCacheRef.current.set(audioId, url);
@@ -638,8 +678,6 @@ export default function ChatWindow() {
   const loginWithGoogle = async () => {
     try {
       const origin = typeof window !== "undefined" ? window.location.origin : "http://localhost:3000";
-
-      // ✅ 수정: /chat 이 아니라 /auth/callback 으로 보냄
       const redirectTo = `${origin}/auth/callback`;
 
       const { error } = await supabase.auth.signInWithOAuth({
@@ -658,16 +696,12 @@ export default function ChatWindow() {
   };
 
   const closeLoginModal = () => setShowLoginModal(false);
-
   const goHome = () => router.push("/");
 
   // 타자 효과
   const startTypewriter = (fullText: string) => {
-    if (typingIntervalRef.current) {
-      clearInterval(typingIntervalRef.current);
-    }
+    if (typingIntervalRef.current) clearInterval(typingIntervalRef.current);
 
-    // ✅ 새 답변이 오면 기본적으로 따라가도록 ON
     shouldAutoScrollRef.current = true;
 
     let index = 0;
@@ -684,18 +718,12 @@ export default function ChatWindow() {
 
         if (last.role !== "assistant") return prev;
 
-        newMessages[lastIndex] = {
-          ...last,
-          content: fullText.slice(0, index),
-        };
-
+        newMessages[lastIndex] = { ...last, content: fullText.slice(0, index) };
         return newMessages;
       });
 
       if (index >= fullText.length) {
-        if (typingIntervalRef.current) {
-          clearInterval(typingIntervalRef.current);
-        }
+        if (typingIntervalRef.current) clearInterval(typingIntervalRef.current);
       }
     }, typingSpeed);
   };
@@ -709,7 +737,6 @@ export default function ChatWindow() {
     setStudyState({});
     setActiveStudyKey(null);
 
-    // ✅ 리셋 시 auto-scroll ON
     shouldAutoScrollRef.current = true;
 
     audioCacheRef.current.forEach((url) => URL.revokeObjectURL(url));
@@ -779,7 +806,6 @@ export default function ChatWindow() {
 
       let baseSpanish = "";
 
-      // ✅ 1) user 말풍선이면: correction이 없으면 먼저 생성
       if (message.role === "user") {
         if (!message.details?.correction) {
           const res = await fetch("/api/details-user", {
@@ -793,7 +819,6 @@ export default function ChatWindow() {
             return;
           }
 
-          // message state에 correction 저장
           setMessages((prev) =>
             prev.map((m) =>
               m.id === message.id
@@ -813,7 +838,6 @@ export default function ChatWindow() {
           baseSpanish = message.details.correction.trim();
         }
       } else {
-        // ✅ 2) assistant 말풍선은 그대로
         baseSpanish = message.content.trim();
       }
 
@@ -839,7 +863,6 @@ export default function ChatWindow() {
         return;
       }
 
-      // ✅ TTS 키: 가능하면 dbId를 쓰고, 없으면 messageKey(임시)
       const ttsKey = message.dbId ?? messageKey;
 
       setStudyState((prev) => ({
@@ -871,7 +894,6 @@ export default function ChatWindow() {
     setIsCreatingConfiguredSession(true);
 
     try {
-      // 게스트 모드: 세션ID 없이 인사만 받아오기
       if (isGuest) {
         const res = await fetch("/api/session/create-configured", {
           method: "POST",
@@ -894,23 +916,15 @@ export default function ChatWindow() {
         const greeting: string = data.greeting ?? data.reply ?? "";
         const formattedGreeting = formatAssistantText(greeting);
 
-        // ✅ 시작 시 auto-scroll ON
         shouldAutoScrollRef.current = true;
 
-        setMessages([
-          {
-            id: makeId(),
-            role: "assistant",
-            content: "",
-          },
-        ]);
+        setMessages([{ id: makeId(), role: "assistant", content: "" }]);
         startTypewriter(formattedGreeting);
         setHasStarted(true);
         setSessionId(null);
         return;
       }
 
-      // 로그인 사용자: 세션 생성 + 첫 인사
       const accessToken = await getAccessToken();
 
       const res = await fetch("/api/session/create-configured", {
@@ -939,19 +953,12 @@ export default function ChatWindow() {
 
       setSessionId(data.sessionId);
 
-      // ✅ 시작 시 auto-scroll ON
       shouldAutoScrollRef.current = true;
 
-      setMessages([
-        {
-          id: makeId(),
-          role: "assistant",
-          content: "",
-        },
-      ]);
+      setMessages([{ id: makeId(), role: "assistant", content: "" }]);
       startTypewriter(formattedGreeting);
       setHasStarted(true);
-      setChatFlow("existingSession"); // 이제부터는 '세션 이어가기' 모드로 동작
+      setChatFlow("existingSession");
     } catch (e) {
       console.error("handleStartConfiguredConversation error:", e);
       alert("처음 인사를 불러오는 데 문제가 생겼어요 🥲");
@@ -965,22 +972,17 @@ export default function ChatWindow() {
     if (!hasStarted) return;
     if (!input.trim() || isSending) return;
 
-    if (isGuest && guestTrialCount >= 2) {
+    // ✅ 게스트 체험: 최대 5회
+    if (isGuest && guestTrialCount >= 5) {
       setShowLoginModal(true);
       return;
     }
 
     const trimmed = input.trim();
-
     const tempUserId = makeId();
 
-    const userMessage: ChatMessage = {
-      id: tempUserId,
-      role: "user",
-      content: trimmed,
-    };
+    const userMessage: ChatMessage = { id: tempUserId, role: "user", content: trimmed };
 
-    // ✅ 내가 보낸 순간엔 따라가도록 ON
     shouldAutoScrollRef.current = true;
 
     const newMessages = [...messages, userMessage];
@@ -993,7 +995,6 @@ export default function ChatWindow() {
     try {
       const accessToken = !isGuest ? await getAccessToken() : null;
 
-      // 로그인 모드인데 세션ID가 없으면 비정상 플로우 → 에러 처리
       if (!isGuest) {
         if (!currentSessionId) {
           console.error("No sessionId in logged-in mode");
@@ -1002,7 +1003,6 @@ export default function ChatWindow() {
           return;
         }
 
-        // user 메시지 DB 저장
         try {
           const saveUserRes = await fetch("/api/message/add", {
             method: "POST",
@@ -1021,7 +1021,6 @@ export default function ChatWindow() {
           if (!saveUserRes.ok || saveUserData?.ok === false) {
             console.error("message/add (user) error:", saveUserData);
           } else {
-            // ✅ 가능한 형태들을 넓게 커버해서 dbId 주입
             const dbId =
               saveUserData?.id ??
               saveUserData?.message?.id ??
@@ -1038,15 +1037,13 @@ export default function ChatWindow() {
         }
       }
 
-      // GPT 응답
       const chatRes = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           messages: newMessages,
           isFirst: false,
-          sessionId: currentSessionId, // 로그인: 이걸로 DB에서 조회
-          // ✅ 게스트 폴백(있으면 사용, 없으면 백엔드 기본값)
+          sessionId: currentSessionId,
           language: selectedLanguage,
           level: selectedLevel,
           personaType: selectedPersona,
@@ -1058,19 +1055,11 @@ export default function ChatWindow() {
 
       const tempAssistantId = makeId();
 
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: tempAssistantId,
-          role: "assistant",
-          content: "",
-        },
-      ]);
+      setMessages((prev) => [...prev, { id: tempAssistantId, role: "assistant", content: "" }]);
 
       const formatted = formatAssistantText(fullAssistantText);
       startTypewriter(formatted);
 
-      // assistant 메시지 DB 저장
       if (!isGuest && currentSessionId) {
         try {
           const saveAssistantRes = await fetch("/api/message/add", {
@@ -1113,14 +1102,8 @@ export default function ChatWindow() {
       console.error(e);
       setMessages((prev) => [
         ...prev,
-        {
-          id: makeId(),
-          role: "assistant",
-          content: "응답을 가져오는 데 문제가 생겼어. 잠시 후 다시 시도해 줘 🙏",
-        },
+        { id: makeId(), role: "assistant", content: "응답을 가져오는 데 문제가 생겼어. 잠시 후 다시 시도해 줘 🙏" },
       ]);
-
-      // ✅ 오류 메시지도 따라가도록 ON
       shouldAutoScrollRef.current = true;
     } finally {
       setIsSending(false);
@@ -1136,7 +1119,7 @@ export default function ChatWindow() {
 
   const activeStudyCard: StudyCard | null = activeStudyKey ? studyState[activeStudyKey] ?? null : null;
 
-  // 언어/레벨/페르소나 라벨
+  // 라벨들
   const languageLabel = (code: string | null) => {
     switch (code) {
       case "en":
@@ -1189,7 +1172,6 @@ export default function ChatWindow() {
   };
 
   const renderWizardStep = () => {
-    // 1~3단계 공통 버튼 스타일
     const buttonStyle: React.CSSProperties = {
       padding: "10px 12px",
       borderRadius: "999px",
@@ -1403,7 +1385,6 @@ export default function ChatWindow() {
       );
     }
 
-    // 4단계 요약 + 시작
     return (
       <div>
         <h3 style={{ fontSize: "18px", color: "#f9fafb", marginBottom: "12px" }}>
@@ -1544,7 +1525,6 @@ export default function ChatWindow() {
             marginBottom: "12px",
           }}
         >
-          {/* 1) 전체 로딩 */}
           {isInitialLoading ? (
             <div style={{ width: "100%", padding: "12px 0", textAlign: "center", fontSize: "14px", color: "#9ca3af" }}>
               준비 중입니다...
@@ -1599,7 +1579,6 @@ export default function ChatWindow() {
                           alignSelf: isUserMsg ? "flex-end" : "flex-start",
                         }}
                       >
-                        {/* 내 말 */}
                         {isUserMsg && (
                           <>
                             <button
@@ -1637,7 +1616,6 @@ export default function ChatWindow() {
                           </>
                         )}
 
-                        {/* 말풍선 */}
                         <div
                           style={{
                             backgroundColor: isUserMsg ? "#2563eb" : "#222",
@@ -1651,7 +1629,6 @@ export default function ChatWindow() {
                           {msg.content}
                         </div>
 
-                        {/* GPT 말 */}
                         {isAssistant && (
                           <div style={{ display: "flex", gap: "4px" }}>
                             <button
@@ -1727,7 +1704,6 @@ export default function ChatWindow() {
                         )}
                       </div>
 
-                      {/* 상세 영역 */}
                       {isExpanded && (
                         <div
                           style={{
@@ -1799,7 +1775,6 @@ export default function ChatWindow() {
                 );
               })}
 
-              {/* ✅ 맨 아래 anchor */}
               <div ref={bottomRef} />
             </>
           )}
@@ -1869,7 +1844,7 @@ export default function ChatWindow() {
         )}
       </div>
 
-      {/* 게스트 2회 초과 시 로그인 모달 */}
+      {/* 게스트 5회 초과 시 로그인 모달 */}
       {showLoginModal && (
         <div
           style={{
@@ -1937,7 +1912,7 @@ export default function ChatWindow() {
         </div>
       )}
 
-      {/* 🔔 TTS 출시요청 모달 (✅ zIndex를 학습 모달보다 높게!) */}
+      {/* 🔔 TTS 출시요청 모달 */}
       {showLaunchRequestModal && (
         <div
           style={{
@@ -1947,7 +1922,7 @@ export default function ChatWindow() {
             display: "flex",
             justifyContent: "center",
             alignItems: "center",
-            zIndex: 65, // ✅ StudyModal(60)보다 높게
+            zIndex: 65,
           }}
         >
           <div
@@ -2000,7 +1975,6 @@ export default function ChatWindow() {
               </span>
             </label>
 
-            {/* ✅ 전문보기 버튼 */}
             <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "14px" }}>
               <button
                 type="button"
@@ -2091,7 +2065,7 @@ export default function ChatWindow() {
             display: "flex",
             justifyContent: "center",
             alignItems: "center",
-            zIndex: 66, // ✅ 출시요청(65)보다도 위
+            zIndex: 66,
           }}
           onClick={() => setShowPrivacyNoticeModal(false)}
         >
@@ -2206,7 +2180,15 @@ type StudyModalProps = {
   onOpenLaunchRequestModal: () => void;
 };
 
-function StudyModal({ isOpen, onClose, card, sessionId, canUseTTS, isGuest, onOpenLaunchRequestModal }: StudyModalProps) {
+function StudyModal({
+  isOpen,
+  onClose,
+  card,
+  sessionId,
+  canUseTTS,
+  isGuest,
+  onOpenLaunchRequestModal,
+}: StudyModalProps) {
   const [answer, setAnswer] = useState("");
   const [feedback, setFeedback] = useState<{
     correct_answer: string;
@@ -2221,7 +2203,6 @@ function StudyModal({ isOpen, onClose, card, sessionId, canUseTTS, isGuest, onOp
   const ttsAudioRef = useRef<HTMLAudioElement | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
 
-  // 모달 닫힐 때 상태 초기화
   useEffect(() => {
     if (!isOpen) {
       setAnswer("");
@@ -2288,9 +2269,7 @@ function StudyModal({ isOpen, onClose, card, sessionId, canUseTTS, isGuest, onOp
     setFeedback(null);
   };
 
-  // 🔊 학습 모달 안 TTS
   const handlePlayTTS = async () => {
-    // ✅ 여기서 alert 대신 "출시요청 모달"을 부모에게 요청
     if (!canUseTTS) {
       if (isGuest) {
         alert("TTS는 로그인 후 사용할 수 있어요 🙂");
@@ -2315,7 +2294,6 @@ function StudyModal({ isOpen, onClose, card, sessionId, canUseTTS, isGuest, onOp
       return;
     }
 
-    // ✅ 핵심: StudyModal도 sessionId + (dbId 우선)로 저장/조회
     const audioId = `${sessionId}/${card.ttsKey}`;
 
     try {
@@ -2361,7 +2339,6 @@ function StudyModal({ isOpen, onClose, card, sessionId, canUseTTS, isGuest, onOp
         }),
       });
 
-      // ✅ 혹시 서버에서 401/403로 막아도 "출시요청"으로 유도
       if (res.status === 401 || res.status === 403) {
         const blocked = await res.json().catch(() => null);
         console.warn("StudyModal TTS blocked:", blocked);
@@ -2409,7 +2386,7 @@ function StudyModal({ isOpen, onClose, card, sessionId, canUseTTS, isGuest, onOp
         display: "flex",
         justifyContent: "center",
         alignItems: "center",
-        zIndex: 60, // ✅ 학습 모달
+        zIndex: 60,
       }}
     >
       <div
@@ -2423,7 +2400,6 @@ function StudyModal({ isOpen, onClose, card, sessionId, canUseTTS, isGuest, onOp
           position: "relative",
         }}
       >
-        {/* 헤더 */}
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
           <h2 style={{ color: "#f9fafb", fontSize: "18px", fontWeight: 600, margin: 0 }}>학습 모드</h2>
           <button
@@ -2440,7 +2416,6 @@ function StudyModal({ isOpen, onClose, card, sessionId, canUseTTS, isGuest, onOp
           </button>
         </div>
 
-        {/* 한국어 문장 + 힌트 */}
         <div style={{ marginBottom: "12px" }}>
           <p style={{ fontSize: "13px", color: "#e5e7eb", marginBottom: "4px" }}>한국어 문장</p>
           <div
@@ -2457,7 +2432,6 @@ function StudyModal({ isOpen, onClose, card, sessionId, canUseTTS, isGuest, onOp
           </div>
         </div>
 
-        {/* 스페인어 TTS 버튼 */}
         <div style={{ marginBottom: "12px", display: "flex", justifyContent: "flex-end" }}>
           <button
             onClick={handlePlayTTS}
@@ -2478,7 +2452,6 @@ function StudyModal({ isOpen, onClose, card, sessionId, canUseTTS, isGuest, onOp
           </button>
         </div>
 
-        {/* 내가 적는 문장 */}
         <div style={{ marginBottom: "12px" }}>
           <p style={{ fontSize: "13px", color: "#e5e7eb", marginBottom: "4px" }}>배운 언어로 다시 써보기</p>
           <textarea
@@ -2500,7 +2473,6 @@ function StudyModal({ isOpen, onClose, card, sessionId, canUseTTS, isGuest, onOp
           />
         </div>
 
-        {/* GPT 피드백 */}
         {feedback && (
           <div
             style={{
@@ -2527,7 +2499,6 @@ function StudyModal({ isOpen, onClose, card, sessionId, canUseTTS, isGuest, onOp
           </div>
         )}
 
-        {/* 버튼들 */}
         <div style={{ display: "flex", justifyContent: "space-between", marginTop: "4px" }}>
           <button
             onClick={handleRetry}

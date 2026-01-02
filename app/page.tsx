@@ -1,10 +1,13 @@
-// app/page.tsx
 "use client";
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import type { User } from "@supabase/supabase-js";
+
+const TERMS_VERSION = "2025-12-30";
+const PRIVACY_VERSION = "2025-12-30";
+const COLLECTION_VERSION = "2025-12-30";
 
 type SessionSummary = {
   id: string;
@@ -35,19 +38,12 @@ export default function Home() {
 
   const [isSlotsReady, setIsSlotsReady] = useState(false);
 
-  // ✅ 화면 폭에 따라 가로/세로 배치 전환
   const [isNarrow, setIsNarrow] = useState(false);
-
-  // ✅ "일정 수준 이상"이면 (PC) = 좌측 타이틀 + 우측 로그인, 중앙 버튼 구조
   const [isWide, setIsWide] = useState(false);
 
-  // ✅ 설정 모달
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-
-  // ✅ 설정 > 회원탈퇴 상세 화면 토글
   const [isWithdrawalOpen, setIsWithdrawalOpen] = useState(false);
 
-  // ✅ 회원탈퇴 체크/로딩/에러
   const [deleteChecked, setDeleteChecked] = useState(false);
   const [isDeletingAccount, setIsDeletingAccount] = useState(false);
   const [deleteAccountError, setDeleteAccountError] = useState<string | null>(null);
@@ -55,7 +51,6 @@ export default function Home() {
   useEffect(() => {
     const handleResize = () => {
       setIsNarrow(window.innerWidth < 900);
-      // ✅ PC 레이아웃 전환 기준 (원하는대로 1100/1200 등 조절 가능)
       setIsWide(window.innerWidth >= 1100);
     };
 
@@ -81,6 +76,39 @@ export default function Home() {
       authListener.subscription.unsubscribe();
     };
   }, []);
+
+  // ✅ (추가) 로그인 유저는 반드시 약관 동의 체크
+  useEffect(() => {
+    const checkConsent = async () => {
+      if (user === undefined) return; // 로딩 중
+      if (!user) return; // 비로그인
+
+      const { data: consent, error } = await supabase
+        .from("user_consents")
+        .select("terms_version, privacy_version, collection_version")
+        .eq("user_id", user.id)
+        .maybeSingle();
+
+      if (error) {
+        console.error("Consent check error (home):", error);
+        // 보수적으로 처리: 로그인 화면으로
+        router.replace("/login");
+        return;
+      }
+
+      const isAccepted =
+        !!consent &&
+        consent.terms_version === TERMS_VERSION &&
+        consent.privacy_version === PRIVACY_VERSION &&
+        consent.collection_version === COLLECTION_VERSION;
+
+      if (!isAccepted) {
+        router.replace("/join/consent");
+      }
+    };
+
+    checkConsent();
+  }, [user, router]);
 
   // ✅ 로그인된 경우에만 세션 목록 3개 로드
   useEffect(() => {
@@ -238,7 +266,6 @@ export default function Home() {
   const getCardLayoutStyle = () =>
     isNarrow ? { width: "100%" } : { flex: "1 1 0", minWidth: "0", maxWidth: "320px" };
 
-  // ✅ 설정 열 때 초기화
   const openSettings = () => {
     setDeleteAccountError(null);
     setDeleteChecked(false);
@@ -261,7 +288,6 @@ export default function Home() {
     setIsWithdrawalOpen(false);
   };
 
-  // ✅ 회원탈퇴 호출
   const handleDeleteAccount = async () => {
     if (!user) return;
 
@@ -318,9 +344,7 @@ export default function Home() {
           boxSizing: "border-box",
         }}
       >
-        {/* ✅ 비로그인 상태 */}
         {!isUserLoading && !user ? (
-          // ✅ PC(일정 폭 이상): "좌측 타이틀 + 우측 로그인" / "중앙 버튼" 구조 (스크린샷처럼)
           isWide ? (
             <div
               style={{
@@ -335,7 +359,6 @@ export default function Home() {
                 alignItems: "start",
               }}
             >
-              {/* 좌측 타이틀 블럭 */}
               <div style={{ gridColumn: "1 / 2", gridRow: "1 / 2" }}>
                 <h1 style={{ color: "#f9fafb", fontSize: "24px", margin: "0 0 6px 0" }}>
                   말하면서 배우는 언어 챗봇
@@ -347,7 +370,6 @@ export default function Home() {
                 </p>
               </div>
 
-              {/* 중앙(두 컬럼 spanning): 안내문 + 버튼 2개 */}
               <div
                 style={{
                   gridColumn: "1 / 3",
@@ -411,7 +433,6 @@ export default function Home() {
               </div>
             </div>
           ) : (
-            // ✅ 모바일/좁은 화면: 기존처럼 중앙정렬 (문구/내용 그대로)
             <div
               style={{
                 width: "100%",
@@ -486,7 +507,6 @@ export default function Home() {
             </div>
           )
         ) : (
-          // ✅ 로그인 상태(또는 로딩 중): 기존 레이아웃 유지
           <div
             style={{
               width: "100%",
@@ -497,7 +517,6 @@ export default function Home() {
               alignItems: "center",
             }}
           >
-            {/* 상단 헤더 영역 */}
             <div
               style={{
                 width: "100%",
@@ -533,9 +552,7 @@ export default function Home() {
 
               <div style={{ width: isNarrow ? "100%" : "auto" }}>
                 {isUserLoading ? (
-                  <span style={{ color: "#9ca3af", fontSize: "13px" }}>
-                    사용자 정보를 불러오는 중...
-                  </span>
+                  <span style={{ color: "#9ca3af", fontSize: "13px" }}>사용자 정보를 불러오는 중...</span>
                 ) : user ? (
                   <div
                     style={{
@@ -595,7 +612,6 @@ export default function Home() {
               </div>
             </div>
 
-            {/* 로그인 상태: 3개 세션 카드 */}
             {!isUserLoading && user && (
               <div style={{ width: "100%", marginTop: "8px" }}>
                 <div
@@ -606,13 +622,9 @@ export default function Home() {
                     marginBottom: "8px",
                   }}
                 >
-                  <h2 style={{ color: "#f9fafb", fontSize: "18px", margin: 0 }}>
-                    나의 대화 세션
-                  </h2>
+                  <h2 style={{ color: "#f9fafb", fontSize: "18px", margin: 0 }}>나의 대화 세션</h2>
                   {isLoadingSessions && (
-                    <span style={{ color: "#9ca3af", fontSize: "12px" }}>
-                      세션을 불러오는 중...
-                    </span>
+                    <span style={{ color: "#9ca3af", fontSize: "12px" }}>세션을 불러오는 중...</span>
                   )}
                 </div>
 
@@ -704,13 +716,10 @@ export default function Home() {
                                 marginBottom: "6px",
                               }}
                             >
-                              <span style={{ fontSize: "13px", color: "#9ca3af" }}>
-                                세션 {slot}
-                              </span>
+                              <span style={{ fontSize: "13px", color: "#9ca3af" }}>세션 {slot}</span>
                               {session && (
                                 <span style={{ fontSize: "11px", color: "#6b7280" }}>
-                                  최근 사용:{" "}
-                                  {new Date(session.created_at).toLocaleDateString("ko-KR")}
+                                  최근 사용: {new Date(session.created_at).toLocaleDateString("ko-KR")}
                                 </span>
                               )}
                             </div>
@@ -727,13 +736,7 @@ export default function Home() {
                               {languageTitle(session)}
                             </div>
 
-                            <div
-                              style={{
-                                fontSize: "12px",
-                                color: "#9ca3af",
-                                minHeight: "18px",
-                              }}
-                            >
+                            <div style={{ fontSize: "12px", color: "#9ca3af", minHeight: "18px" }}>
                               {formatConfigLabel(session)}
                             </div>
                           </div>
@@ -791,7 +794,6 @@ export default function Home() {
               </div>
             )}
 
-            {/* ✅ 설정 모달 (설정 목록 / 회원탈퇴 상세) */}
             {isSettingsOpen && (
               <div
                 onClick={closeSettings}
@@ -890,8 +892,7 @@ export default function Home() {
                       <div style={{ fontWeight: 700, marginBottom: "8px" }}>회원탈퇴</div>
 
                       <div style={{ color: "#fca5a5", fontSize: "13px", lineHeight: 1.5 }}>
-                        탈퇴 즉시 모든 정보가 삭제되며 복구가 불가합니다. 그래도
-                        탈퇴하시겠습니까
+                        탈퇴 즉시 모든 정보가 삭제되며 복구가 불가합니다. 그래도 탈퇴하시겠습니까
                       </div>
 
                       <label
@@ -951,7 +952,6 @@ export default function Home() {
         )}
       </main>
 
-      {/* ✅ 하단 푸터 */}
       <footer
         style={{
           width: "100%",
@@ -979,10 +979,7 @@ export default function Home() {
           <span style={{ display: isNarrow ? "none" : "inline" }}>·</span>
           <span>
             문의 :{" "}
-            <a
-              href={`mailto:${contactEmail}`}
-              style={{ color: "#e5e7eb", textDecoration: "none" }}
-            >
+            <a href={`mailto:${contactEmail}`} style={{ color: "#e5e7eb", textDecoration: "none" }}>
               {contactEmail}
             </a>
           </span>
