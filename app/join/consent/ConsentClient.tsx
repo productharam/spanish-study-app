@@ -5,7 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 
-const TERMS_VERSION = "2025-12-30";
+const TERMS_VERSION = "2026-01-05"; // ✅ 약관 내용 변경으로 버전 업데이트
 const PRIVACY_VERSION = "2025-12-30";
 const COLLECTION_VERSION = "2025-12-30";
 
@@ -66,6 +66,7 @@ export default function ConsentClient() {
 
 제4조(이용자의 의무)
 이용자는 서비스의 정상 운영을 방해하는 행위(비정상 트래픽 유발, 악용 등), 타인의 권리 침해, 법령 및 공서양속에 반하는 콘텐츠 입력을 해서는 안 됩니다.
+- 비정상적으로 이용하는 경우(예: 프롬프트 우회 시도 등) 서비스 이용이 제한될 수 있습니다.
 
 제5조(대화 콘텐츠 및 책임)
 1) 이용자는 서비스 내에서 본인이 입력한 대화 내용 및 서비스가 생성한 응답을 확인할 수 있습니다.
@@ -103,7 +104,6 @@ export default function ConsentClient() {
 
 5. 보유 및 이용기간
 - 원칙적으로 회원 탈퇴 시 지체 없이 파기합니다.
-- 단, 관련 법령에 따라 보관이 필요한 경우 해당 기간 동안 보관할 수 있습니다.
 
 6. 이용자의 권리
 이용자는 개인정보 열람, 정정, 삭제, 처리정지 등을 요구할 수 있으며, 회원 탈퇴를 통해 개인정보 처리 중단 및 삭제를 요청할 수 있습니다.
