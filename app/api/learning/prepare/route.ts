@@ -26,12 +26,17 @@ function languageName(code: string) {
   }
 }
 
-// ✅ 문자열 정규화: 캐시 키 안정화
+// ✅ 문자열 정규화(표시/채점 품질용). 이제 "키"는 messageId라서
+// 이건 중복 방지 목적보다는 품질/안정성 목적.
 function normalizeSentence(s: string) {
-  return s
+  return String(s ?? "")
+    .normalize("NFC")
+    .replace(/\u00A0/g, " ")
+    .replace(/[\u200B-\u200D\uFEFF]/g, "")
     .trim()
     .replace(/\r\n/g, "\n")
     .replace(/[ \t]+/g, " ")
+    .replace(/[ \t]+\n/g, "\n")
     .replace(/\n{3,}/g, "\n\n");
 }
 
@@ -58,10 +63,8 @@ async function getSessionConfig(sessionId?: string | null) {
 }
 
 async function generateKoreanPrompt(targetLanguageCode: string, sentence: string) {
-  // ✅ 안전: 너무 길면 잘라서 품질/비용/안정성 확보 (원하면 숫자 조절)
   const cleaned = String(sentence ?? "").trim().slice(0, 600);
 
-  // ✅ 영어 프롬프트로 안정화 (JSON only 강제)
   const prompt = `
 Convert the following ${languageName(targetLanguageCode)} sentence into a Korean prompt for speaking practice.
 
@@ -103,13 +106,22 @@ Original sentence:
 
 export async function POST(req: NextRequest) {
   try {
-    const { text, sessionId } = (await req.json().catch(() => ({}))) as {
+    const { text, sessionId, messageId } = (await req.json().catch(() => ({}))) as {
       text?: string;
       sessionId?: string | null;
+      messageId?: string | null; // ✅ DB chat_messages.id
     };
 
     if (!text || typeof text !== "string") {
       return NextResponse.json({ ok: false, error: "text 필드가 필요합니다." }, { status: 400 });
+    }
+
+    if (!sessionId || typeof sessionId !== "string") {
+      return NextResponse.json({ ok: false, error: "sessionId 필드가 필요합니다." }, { status: 400 });
+    }
+
+    if (!messageId || typeof messageId !== "string") {
+      return NextResponse.json({ ok: false, error: "messageId(DB id) 필드가 필요합니다." }, { status: 400 });
     }
 
     const baseSentence = normalizeSentence(text);
@@ -128,23 +140,45 @@ export async function POST(req: NextRequest) {
       userId = data.user?.id ?? null;
     }
 
+    if (!userId) {
+      return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
+    }
+
     // ✅ 세션 설정(언어) 가져오기 (없으면 기본 es)
     const cfg = await getSessionConfig(sessionId);
     const language = cfg?.language ?? "es";
 
-    // ✅ 1) 캐시 조회 (로그인 유저만)
-    if (userId && sessionId) {
+    // ✅ 0) (선택이지만 추천) messageId가 진짜 이 유저/세션의 메시지인지 검증
+    //    - 잘못된 messageId로 다른 카드 덮어쓰는 사고 방지
+    const { data: msgRow, error: msgErr } = await supabaseServer
+      .from("chat_messages")
+      .select("id, session_id")
+      .eq("id", messageId)
+      .maybeSingle();
+
+    if (msgErr) {
+      console.error("chat_messages select(messageId) error:", msgErr);
+      return NextResponse.json({ ok: false, error: "메시지 검증 중 오류" }, { status: 500 });
+    }
+    if (!msgRow || (msgRow as any).session_id !== sessionId) {
+      return NextResponse.json({ ok: false, error: "유효하지 않은 messageId" }, { status: 400 });
+    }
+
+    // ✅ 1) 캐시 조회: (user_id, session_id, message_id)
+    {
       const { data: existing, error } = await supabaseServer
         .from("learning_cards")
-        .select("id, korean_prompt")
+        .select("id, korean_prompt, corrected_spanish")
         .eq("user_id", userId)
         .eq("session_id", sessionId)
-        .eq("corrected_spanish", baseSentence)
+        .eq("message_id", messageId)
         .maybeSingle();
 
       if (error) {
         console.error("learning_cards existingCard error:", error.message);
       } else if (existing) {
+        // 필요하면: 지금 들어온 baseSentence가 기존 corrected_spanish와 다르면 업데이트(원문↔교정문 변경 등)
+        // 여기서는 캐시 반환만 하고 싶으면 그대로 리턴.
         return NextResponse.json({
           ok: true,
           cardId: existing.id,
@@ -157,38 +191,34 @@ export async function POST(req: NextRequest) {
     // ✅ 2) GPT 생성
     const { korean } = await generateKoreanPrompt(language, baseSentence);
 
-    // ✅ 3) 저장 (로그인 유저만) - upsert로 멱등 처리
-    if (userId && sessionId) {
-      const payload = {
-        user_id: userId,
-        session_id: sessionId,
-        corrected_spanish: baseSentence,
-        korean_prompt: korean,
-      };
+    // ✅ 3) 저장 - upsert(멱등): (user_id, session_id, message_id)
+    const payload = {
+      user_id: userId,
+      session_id: sessionId,
+      message_id: messageId, // ✅ 핵심
+      corrected_spanish: baseSentence,
+      korean_prompt: korean,
+    };
 
-      const { data: upserted, error: upsertErr } = await supabaseServer
-        .from("learning_cards")
-        .upsert(payload, {
-          onConflict: "user_id,session_id,corrected_spanish",
-        })
-        .select("id")
-        .single();
+    const { data: upserted, error: upsertErr } = await supabaseServer
+      .from("learning_cards")
+      .upsert(payload, {
+        onConflict: "user_id,session_id,message_id",
+      })
+      .select("id")
+      .single();
 
-      if (upsertErr || !upserted) {
-        console.error("learning_cards upsert error:", upsertErr);
-        return NextResponse.json({
-          ok: true,
-          cardId: null,
-          korean,
-          warning: "카드를 저장하지 못했어요.",
-        });
-      }
-
-      return NextResponse.json({ ok: true, cardId: upserted.id, korean, fromCache: false });
+    if (upsertErr || !upserted) {
+      console.error("learning_cards upsert error:", upsertErr);
+      return NextResponse.json({
+        ok: true,
+        cardId: null,
+        korean,
+        warning: "카드를 저장하지 못했어요.",
+      });
     }
 
-    // 게스트: 저장 없이 결과만
-    return NextResponse.json({ ok: true, cardId: null, korean, fromCache: false });
+    return NextResponse.json({ ok: true, cardId: upserted.id, korean, fromCache: false });
   } catch (e) {
     console.error("❌ /api/learning/prepare error:", e);
     return NextResponse.json({ ok: false, error: "서버 오류" }, { status: 500 });
