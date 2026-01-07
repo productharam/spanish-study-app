@@ -6,6 +6,7 @@ import { useEffect, useState, useRef, KeyboardEvent } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import MessageDetailsMore from "./MessageDetailsMore";
+import { useSoundTTS } from "./Sound";
 
 const TERMS_VERSION = "2025-12-30";
 const PRIVACY_VERSION = "2025-12-30";
@@ -57,11 +58,6 @@ export default function ChatWindow() {
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const shouldAutoScrollRef = useRef(true);
-
-  // TTS 관련
-  const audioCacheRef = useRef<Map<string, string>>(new Map());
-  const [playingMessageKey, setPlayingMessageKey] = useState<string | null>(null);
-  const currentAudioRef = useRef<HTMLAudioElement | null>(null);
 
   // ✅ 프로필(TTS 권한) 관련
   const [ttsEnabled, setTtsEnabled] = useState<boolean>(false);
@@ -118,11 +114,10 @@ export default function ChatWindow() {
   // ✅ messageKey: dbId 우선 (TTS/학습/캐시의 핵심 키)
   const getMessageKey = (m: ChatMessage) => m.dbId ?? m.id;
 
-  // ✅ audioId: 반드시 sessionId + (dbId 우선)로 고정
-  const getAudioId = (m: ChatMessage) => {
-    if (!sessionId) return null;
-    const key = getMessageKey(m);
-    return `${sessionId}/${key}`;
+  // 🔐 브라우저 Supabase 세션에서 access token 가져오기
+  const getAccessToken = async () => {
+    const { data } = await supabase.auth.getSession();
+    return data.session?.access_token ?? null;
   };
 
   // ✅ 출시요청 모달 열기(공통)
@@ -132,6 +127,16 @@ export default function ChatWindow() {
     setShowPrivacyNoticeModal(false);
     setShowLaunchRequestModal(true);
   };
+
+  // 🔊 (분리됨) 말풍선 TTS 훅
+  const { playingMessageKey, handlePlayTTS, stopAllAudio, clearAudioCache } = useSoundTTS({
+    sessionId,
+    isGuest,
+    ttsEnabled,
+    isProfileLoading,
+    getAccessToken,
+    openLaunchRequestModal,
+  });
 
   // ✅ (선택) 사용자가 위로 스크롤하면 자동 스크롤 OFF / 바닥 근처면 ON
   useEffect(() => {
@@ -153,12 +158,6 @@ export default function ChatWindow() {
     if (!shouldAutoScrollRef.current) return;
     bottomRef.current?.scrollIntoView({ behavior: "auto" });
   }, [messages]);
-
-  // 🔐 브라우저 Supabase 세션에서 access token 가져오기
-  const getAccessToken = async () => {
-    const { data } = await supabase.auth.getSession();
-    return data.session?.access_token ?? null;
-  };
 
   // ✅ "호흡 단위" 줄바꿈
   const formatAssistantText = (text: string) => {
@@ -285,9 +284,11 @@ export default function ChatWindow() {
 
     return () => {
       if (typingIntervalRef.current) clearInterval(typingIntervalRef.current);
-      audioCacheRef.current.forEach((url) => URL.revokeObjectURL(url));
-      audioCacheRef.current.clear();
+      // 🔊 TTS 정리 (분리 훅에서도 언마운트 정리하지만, 여기서도 안전하게)
+      stopAllAudio();
+      clearAudioCache();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
 
   /**
@@ -373,6 +374,7 @@ export default function ChatWindow() {
     };
 
     loadProfile();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, isGuest]);
 
   /**
@@ -449,6 +451,7 @@ export default function ChatWindow() {
     };
 
     loadExistingSession();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chatFlow, sessionId, isGuest]);
 
   /**
@@ -564,125 +567,6 @@ export default function ChatWindow() {
     });
   };
 
-  // 🔊 TTS
-  const handlePlayTTS = async (message: ChatMessage) => {
-    try {
-      if (isGuest) {
-        alert("TTS는 로그인 후 사용할 수 있어요 🙂");
-        return;
-      }
-
-      if (!ttsEnabled) {
-        openLaunchRequestModal();
-        return;
-      }
-
-      const messageKey = getMessageKey(message);
-
-      if (playingMessageKey === messageKey && currentAudioRef.current) {
-        currentAudioRef.current.pause();
-        currentAudioRef.current.currentTime = 0;
-        currentAudioRef.current = null;
-        setPlayingMessageKey(null);
-        return;
-      }
-
-      if (currentAudioRef.current) {
-        currentAudioRef.current.pause();
-        currentAudioRef.current.currentTime = 0;
-        currentAudioRef.current = null;
-        setPlayingMessageKey(null);
-      }
-
-      if (!sessionId) {
-        alert("세션 정보가 없어서 음성을 재생할 수 없어요 🥲");
-        return;
-      }
-
-      const audioId = getAudioId(message);
-      if (!audioId) {
-        alert("세션 정보가 없어서 음성을 재생할 수 없어요 🥲");
-        return;
-      }
-
-      if (audioCacheRef.current.has(audioId)) {
-        const existingUrl = audioCacheRef.current.get(audioId)!;
-        const audio = new Audio(existingUrl);
-        currentAudioRef.current = audio;
-        setPlayingMessageKey(messageKey);
-
-        audio.play();
-        audio.onended = () => {
-          setPlayingMessageKey(null);
-          currentAudioRef.current = null;
-        };
-        audio.onerror = () => {
-          setPlayingMessageKey(null);
-          currentAudioRef.current = null;
-        };
-        return;
-      }
-
-      const accessToken = await getAccessToken();
-      if (!accessToken) {
-        alert("로그인이 필요해요 🙂");
-        return;
-      }
-
-      setPlayingMessageKey(messageKey);
-
-      const res = await fetch("/api/tts", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${accessToken}`,
-        },
-        body: JSON.stringify({
-          text: message.content,
-          audioId,
-        }),
-      });
-
-      if (res.status === 401 || res.status === 403) {
-        const data = await res.json().catch(() => null);
-        console.warn("TTS blocked:", data);
-        setPlayingMessageKey(null);
-        openLaunchRequestModal();
-        return;
-      }
-
-      if (!res.ok) {
-        const data = await res.json().catch(() => null);
-        console.error("TTS 요청 실패:", data);
-        throw new Error("TTS 요청 실패");
-      }
-
-      const data = await res.json();
-      const url = data.url as string | undefined;
-      if (!url) throw new Error("TTS URL이 응답에 없어요");
-
-      audioCacheRef.current.set(audioId, url);
-
-      const audio = new Audio(url);
-      currentAudioRef.current = audio;
-
-      audio.play();
-      audio.onended = () => {
-        setPlayingMessageKey(null);
-        currentAudioRef.current = null;
-      };
-      audio.onerror = () => {
-        setPlayingMessageKey(null);
-        currentAudioRef.current = null;
-      };
-    } catch (err) {
-      console.error(err);
-      alert("음성 재생 중 오류가 발생했어");
-      setPlayingMessageKey(null);
-      currentAudioRef.current = null;
-    }
-  };
-
   // 로그인 모달 관련
   const loginWithGoogle = async () => {
     try {
@@ -737,26 +621,11 @@ export default function ChatWindow() {
     }, typingSpeed);
   };
 
-  const stopAllAudio = () => {
-    if (currentAudioRef.current) {
-      currentAudioRef.current.pause();
-      currentAudioRef.current.currentTime = 0;
-      currentAudioRef.current = null;
-    }
-    setPlayingMessageKey(null);
-  };
-
-  const clearAudioCache = () => {
-    audioCacheRef.current.forEach((url) => URL.revokeObjectURL(url));
-    audioCacheRef.current.clear();
-  };
-
   const handleNewChatLocalReset = () => {
     setMessages([]);
     setSessionId(null);
     setHasStarted(false);
     setExpandedMessageIds([]);
-    setPlayingMessageKey(null);
     setStudyState({});
     setActiveStudyKey(null);
 
@@ -820,35 +689,34 @@ export default function ChatWindow() {
   };
 
   // ✅ 학습 모드 시작
-const handleStartStudy = async (message: ChatMessage) => {
-  if (isGuest) {
-    alert("학습 기능은 로그인 후 사용할 수 있어요 🙂");
-    return;
-  }
+  const handleStartStudy = async (message: ChatMessage) => {
+    if (isGuest) {
+      alert("학습 기능은 로그인 후 사용할 수 있어요 🙂");
+      return;
+    }
 
-  if (!sessionId) {
-    alert("세션 정보가 없어서 학습을 시작할 수 없어요 🥲");
-    return;
-  }
+    if (!sessionId) {
+      alert("세션 정보가 없어서 학습을 시작할 수 없어요 🥲");
+      return;
+    }
 
-  if (!message.dbId) {
-    alert("메시지 저장이 완료되지 않았어요. 잠시 후 다시 시도해 주세요.");
-    return;
-  }
+    if (!message.dbId) {
+      alert("메시지 저장이 완료되지 않았어요. 잠시 후 다시 시도해 주세요.");
+      return;
+    }
 
-  const messageKey = getMessageKey(message);
-  const existing = studyState[messageKey];
-  if (existing) {
-    setActiveStudyKey(messageKey);
-    setIsStudyModalOpen(true);
-    return;
-  }
+    const messageKey = getMessageKey(message);
+    const existing = studyState[messageKey];
+    if (existing) {
+      setActiveStudyKey(messageKey);
+      setIsStudyModalOpen(true);
+      return;
+    }
 
-  try {
-    setIsStudyLoading(true);
+    try {
+      setIsStudyLoading(true);
 
-    let baseSpanish = "";
-
+      let baseSpanish = "";
 
       if (message.role === "user") {
         if (!message.details?.correction) {
@@ -893,18 +761,17 @@ const handleStartStudy = async (message: ChatMessage) => {
       const accessToken = await getAccessToken();
 
       const prepRes = await fetch("/api/learning/prepare", {
-  method: "POST",
-  headers: {
-    "Content-Type": "application/json",
-    ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
-  },
-  body: JSON.stringify({
-    text: baseSpanish,
-    sessionId,
-    messageId: message.dbId, // ✅ DB chat_messages.id
-  }),
-});
-
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+        },
+        body: JSON.stringify({
+          text: baseSpanish,
+          sessionId,
+          messageId: message.dbId, // ✅ DB chat_messages.id
+        }),
+      });
 
       const prep = await prepRes.json().catch(() => null);
       if (!prepRes.ok || !prep || prep.ok === false) {
@@ -1263,7 +1130,9 @@ const handleStartStudy = async (message: ChatMessage) => {
               null;
 
             if (dbId) {
-              setMessages((prev) => prev.map((m) => (m.id === tempAssistantId ? { ...m, dbId } : m)));
+              setMessages((prev) =>
+                prev.map((m) => (m.id === tempAssistantId ? { ...m, dbId } : m))
+              );
             }
           }
         } catch (saveErr) {
@@ -1368,7 +1237,9 @@ const handleStartStudy = async (message: ChatMessage) => {
           <h3 style={{ fontSize: "18px", color: "#f9fafb", marginBottom: "12px" }}>
             1단계. 대화할 언어를 선택해 주세요.
           </h3>
-          <p style={{ fontSize: "13px", color: "#9ca3af", marginBottom: "10px" }}>어떤 언어로 대화를 연습하고 싶나요?</p>
+          <p style={{ fontSize: "13px", color: "#9ca3af", marginBottom: "10px" }}>
+            어떤 언어로 대화를 연습하고 싶나요?
+          </p>
 
           <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", marginBottom: "16px" }}>
             {[
@@ -1479,7 +1350,9 @@ const handleStartStudy = async (message: ChatMessage) => {
           <h3 style={{ fontSize: "18px", color: "#f9fafb", marginBottom: "12px" }}>
             3단계. 어떤 스타일의 대화 상대가 좋나요?
           </h3>
-          <p style={{ fontSize: "13px", color: "#9ca3af", marginBottom: "10px" }}>상대의 말투와 역할을 골라보세요.</p>
+          <p style={{ fontSize: "13px", color: "#9ca3af", marginBottom: "10px" }}>
+            상대의 말투와 역할을 골라보세요.
+          </p>
 
           <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginBottom: "16px" }}>
             {[
@@ -1556,7 +1429,9 @@ const handleStartStudy = async (message: ChatMessage) => {
 
     return (
       <div>
-        <h3 style={{ fontSize: "18px", color: "#f9fafb", marginBottom: "12px" }}>4단계. 이 설정으로 대화를 시작할까요?</h3>
+        <h3 style={{ fontSize: "18px", color: "#f9fafb", marginBottom: "12px" }}>
+          4단계. 이 설정으로 대화를 시작할까요?
+        </h3>
         <p style={{ fontSize: "13px", color: "#9ca3af", marginBottom: "12px" }}>
           아래 설정으로 첫 인사를 보낸 뒤, 자유롭게 대화를 이어갈 수 있어요.
         </p>
@@ -1606,12 +1481,16 @@ const handleStartStudy = async (message: ChatMessage) => {
               borderRadius: "999px",
               border: "none",
               backgroundColor:
-                !selectedLanguage || !selectedLevel || !selectedPersona || isCreatingConfiguredSession ? "#4b5563" : "#22c55e",
+                !selectedLanguage || !selectedLevel || !selectedPersona || isCreatingConfiguredSession
+                  ? "#4b5563"
+                  : "#22c55e",
               color: "#f9fafb",
               fontSize: "13px",
               fontWeight: 500,
               cursor:
-                !selectedLanguage || !selectedLevel || !selectedPersona || isCreatingConfiguredSession ? "not-allowed" : "pointer",
+                !selectedLanguage || !selectedLevel || !selectedPersona || isCreatingConfiguredSession
+                  ? "not-allowed"
+                  : "pointer",
             }}
           >
             {isCreatingConfiguredSession ? "대화 시작 준비 중..." : "이 설정으로 대화 시작하기"}
@@ -1776,6 +1655,44 @@ const handleStartStudy = async (message: ChatMessage) => {
                             >
                               📘
                             </button>
+
+                            {/* ✅ 유저 말풍선에도 TTS */}
+                            {!isGuest && !ttsEnabled ? (
+                              <button
+                                onClick={openLaunchRequestModal}
+                                style={{
+                                  fontSize: "12px",
+                                  padding: "4px 10px",
+                                  borderRadius: "999px",
+                                  border: "1px solid #555",
+                                  backgroundColor: "#111",
+                                  color: "white",
+                                  cursor: "pointer",
+                                  whiteSpace: "nowrap",
+                                }}
+                                aria-label="TTS 출시요청"
+                              >
+                                ▶️
+                              </button>
+                            ) : (
+                              <button
+                                onClick={() => handlePlayTTS(msg)}
+                                style={{
+                                  fontSize: "16px",
+                                  padding: "4px 8px",
+                                  borderRadius: "999px",
+                                  border: "1px solid #555",
+                                  backgroundColor: "#111",
+                                  color: "white",
+                                  cursor: "pointer",
+                                  opacity: isProfileLoading ? 0.6 : 1,
+                                }}
+                                disabled={isProfileLoading}
+                                aria-label={playingMessageKey === messageKey ? "문장 정지" : "문장 듣기"}
+                              >
+                                {playingMessageKey === messageKey ? "⏹️" : "▶️"}
+                              </button>
+                            )}
                           </>
                         )}
 
