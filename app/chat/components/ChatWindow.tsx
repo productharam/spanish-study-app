@@ -5,6 +5,7 @@ import type React from "react";
 import { useEffect, useState, useRef, KeyboardEvent } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
+import MessageDetailsMore from "./MessageDetailsMore";
 
 const TERMS_VERSION = "2025-12-30";
 const PRIVACY_VERSION = "2025-12-30";
@@ -138,7 +139,7 @@ export default function ChatWindow() {
     if (!el) return;
 
     const onScroll = () => {
-      const threshold = 80; // 바닥에서 80px 이내면 auto-scroll 유지
+      const threshold = 80;
       const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
       shouldAutoScrollRef.current = isNearBottom;
     };
@@ -204,7 +205,7 @@ export default function ChatWindow() {
         if (modeParam === "guest" || !currentUser) {
           setIsGuest(true);
           setGuestTrialCount(0);
-          setChatFlow("guestNew"); // 설정 위저드 → 대화 시작
+          setChatFlow("guestNew");
           setSessionId(null);
           setSlot(null);
           setMessages([]);
@@ -223,7 +224,6 @@ export default function ChatWindow() {
           setIsEditing(false);
           setEditingTargetDbId(null);
 
-          // ✅ 새 시작은 auto-scroll ON
           shouldAutoScrollRef.current = true;
           return;
         }
@@ -239,17 +239,14 @@ export default function ChatWindow() {
           setMessages([]);
           setHasStarted(false);
 
-          // ✅ (권장) 기존 세션은 로딩 후 세팅될 거지만, 일단 안전하게 초기화
           setSelectedLanguage(null);
           setSelectedLevel(null);
           setSelectedPersona(null);
           setWizardStep(1);
 
-          // ✅ 수정모드 초기화
           setIsEditing(false);
           setEditingTargetDbId(null);
 
-          // ✅ 이어하기는 무조건 마지막으로
           shouldAutoScrollRef.current = true;
         } else if (newParam === "1" && slotParam) {
           // 새 세션 시작 (위저드)
@@ -266,17 +263,14 @@ export default function ChatWindow() {
             setSelectedLevel(null);
             setSelectedPersona(null);
 
-            // ✅ 수정모드 초기화
             setIsEditing(false);
             setEditingTargetDbId(null);
 
-            // ✅ 새 시작은 auto-scroll ON
             shouldAutoScrollRef.current = true;
           } else {
             setChatFlow("invalid");
           }
         } else {
-          // 홈에서 안 들어온 이상한 접근
           setChatFlow("invalid");
         }
       } catch (e) {
@@ -290,9 +284,7 @@ export default function ChatWindow() {
     init();
 
     return () => {
-      if (typingIntervalRef.current) {
-        clearInterval(typingIntervalRef.current);
-      }
+      if (typingIntervalRef.current) clearInterval(typingIntervalRef.current);
       audioCacheRef.current.forEach((url) => URL.revokeObjectURL(url));
       audioCacheRef.current.clear();
     };
@@ -300,18 +292,11 @@ export default function ChatWindow() {
 
   /**
    * ✅ (추가) 동의 체크 useEffect (user/isGuest 세팅 이후)
-   * - 게스트 제외
-   * - user_consents가 없거나 버전 불일치면 /join/consent 로 이동
    */
   useEffect(() => {
     const checkConsent = async () => {
-      // init 끝나기 전에는 대기
       if (isInitialLoading) return;
-
-      // 게스트면 동의 체크 대상 아님
       if (isGuest) return;
-
-      // 로그인 유저가 아니면(이론상) 그냥 종료
       if (!user?.id) return;
 
       try {
@@ -327,12 +312,9 @@ export default function ChatWindow() {
           consent.privacy_version === PRIVACY_VERSION &&
           consent.collection_version === COLLECTION_VERSION;
 
-        if (error) {
-          console.error("ChatWindow consent select error:", error);
-        }
+        if (error) console.error("ChatWindow consent select error:", error);
 
         if (!ok) {
-          // 현재 /chat 쿼리를 포함해서 돌아오게
           const qs = typeof window !== "undefined" ? window.location.search : "";
           const next = `/chat${qs}`;
           router.replace(`/join/consent?next=${encodeURIComponent(next)}`);
@@ -370,9 +352,7 @@ export default function ChatWindow() {
 
         const res = await fetch("/api/profile", {
           method: "GET",
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-          },
+          headers: { Authorization: `Bearer ${accessToken}` },
         });
 
         const data = await res.json().catch(() => null);
@@ -397,7 +377,6 @@ export default function ChatWindow() {
 
   /**
    * ✅ 기존 세션 이어가기 모드: /api/session/messages 로 메시지 로드
-   * ✅ (권장 반영) session의 language/level/persona 를 selected* 에 반영
    */
   useEffect(() => {
     const loadExistingSession = async () => {
@@ -438,10 +417,8 @@ export default function ChatWindow() {
           return;
         }
 
-        // ✅ 세션 id 확정
         setSessionId(session.id);
 
-        // ✅✅ (권장) 기존 세션 설정을 ChatWindow state에도 반영
         setSelectedLanguage((session.language_code ?? null) as string | null);
         setSelectedLevel((session.level_code ?? null) as string | null);
         setSelectedPersona((session.persona_code ?? null) as string | null);
@@ -461,7 +438,6 @@ export default function ChatWindow() {
         setMessages(restored);
         setHasStarted(true);
 
-        // ✅ 로딩 완료 시 수정모드도 꺼둠
         setIsEditing(false);
         setEditingTargetDbId(null);
       } catch (e) {
@@ -492,9 +468,7 @@ export default function ChatWindow() {
 
       const data = await res.json();
 
-      if (!res.ok) {
-        throw new Error("Details API error");
-      }
+      if (!res.ok) throw new Error("Details API error");
 
       setMessages((prev) =>
         prev.map((m) =>
@@ -516,9 +490,7 @@ export default function ChatWindow() {
     } catch (e) {
       console.error("loadDetails error:", e);
       setMessages((prev) =>
-        prev.map((m) =>
-          m.id === id ? { ...m, isDetailsLoading: false, detailsError: true, details: undefined } : m
-        )
+        prev.map((m) => (m.id === id ? { ...m, isDetailsLoading: false, detailsError: true } : m))
       );
     }
   };
@@ -540,9 +512,7 @@ export default function ChatWindow() {
 
       const data = await res.json();
 
-      if (!res.ok) {
-        throw new Error("Details-User API error");
-      }
+      if (!res.ok) throw new Error("Details-User API error");
 
       setMessages((prev) =>
         prev.map((m) =>
@@ -565,9 +535,7 @@ export default function ChatWindow() {
     } catch (e) {
       console.error("loadUserDetails error:", e);
       setMessages((prev) =>
-        prev.map((m) =>
-          m.id === id ? { ...m, isDetailsLoading: false, detailsError: true, details: undefined } : m
-        )
+        prev.map((m) => (m.id === id ? { ...m, isDetailsLoading: false, detailsError: true } : m))
       );
     }
   };
@@ -576,13 +544,11 @@ export default function ChatWindow() {
   const toggleDetails = (id: string, text: string, alreadyHasDetails: boolean) => {
     setExpandedMessageIds((prev) => {
       const isExpanded = prev.includes(id);
-      if (isExpanded) {
-        return prev.filter((x) => x !== id);
-      } else {
-        const next = [...prev, id];
-        if (!alreadyHasDetails) loadDetails(id, text);
-        return next;
-      }
+      if (isExpanded) return prev.filter((x) => x !== id);
+
+      const next = [...prev, id];
+      if (!alreadyHasDetails) loadDetails(id, text);
+      return next;
     });
   };
 
@@ -590,17 +556,15 @@ export default function ChatWindow() {
   const toggleUserDetails = (id: string, text: string, alreadyHasDetails: boolean) => {
     setExpandedMessageIds((prev) => {
       const isExpanded = prev.includes(id);
-      if (isExpanded) {
-        return prev.filter((x) => x !== id);
-      } else {
-        const next = [...prev, id];
-        if (!alreadyHasDetails) loadUserDetails(id, text);
-        return next;
-      }
+      if (isExpanded) return prev.filter((x) => x !== id);
+
+      const next = [...prev, id];
+      if (!alreadyHasDetails) loadUserDetails(id, text);
+      return next;
     });
   };
 
-  // 🔊 TTS: 메시지 1개에 대해 한 번만 API 호출, 이후 재사용
+  // 🔊 TTS
   const handlePlayTTS = async (message: ChatMessage) => {
     try {
       if (isGuest) {
@@ -713,7 +677,7 @@ export default function ChatWindow() {
       };
     } catch (err) {
       console.error(err);
-      alert("음성 재생 중 오류가 발생했어 😢");
+      alert("음성 재생 중 오류가 발생했어");
       setPlayingMessageKey(null);
       currentAudioRef.current = null;
     }
@@ -796,13 +760,11 @@ export default function ChatWindow() {
     setStudyState({});
     setActiveStudyKey(null);
 
-    // 설정 초기화
     setWizardStep(1);
     setSelectedLanguage(null);
     setSelectedLevel(null);
     setSelectedPersona(null);
 
-    // 수정모드 초기화
     setIsEditing(false);
     setEditingTargetDbId(null);
     setInput("");
@@ -845,15 +807,15 @@ export default function ChatWindow() {
 
       if (!res.ok || data?.error) {
         console.error("session/delete error:", data);
-        alert("대화를 삭제하는 중 문제가 발생했어요 🥲");
+        alert("대화를 삭제하는 중 문제가 발생했어요.");
         return;
       }
 
       handleNewChatLocalReset();
-      alert("현재 대화를 깔끔하게 삭제했어요 ✅");
+      alert("현재 대화를 깔끔하게 삭제했어요.");
     } catch (e) {
       console.error("session/delete fetch error:", e);
-      alert("대화를 삭제하는 중 오류가 발생했어요 🥲");
+      alert("대화를 삭제하는 중 오류가 발생했어요.");
     }
   };
 
@@ -994,7 +956,6 @@ export default function ChatWindow() {
         setHasStarted(true);
         setSessionId(null);
 
-        // 게스트: 수정모드 OFF
         setIsEditing(false);
         setEditingTargetDbId(null);
 
@@ -1036,12 +997,11 @@ export default function ChatWindow() {
       setHasStarted(true);
       setChatFlow("existingSession");
 
-      // 수정모드 OFF
       setIsEditing(false);
       setEditingTargetDbId(null);
     } catch (e) {
       console.error("handleStartConfiguredConversation error:", e);
-      alert("처음 인사를 불러오는 데 문제가 생겼어요 🥲");
+      alert("처음 인사를 불러오는 데 문제가 생겼어요.");
     } finally {
       setIsCreatingConfiguredSession(false);
     }
@@ -1084,15 +1044,14 @@ export default function ChatWindow() {
   const rewriteLastUser = async (newContent: string) => {
     if (isGuest) return;
     if (!sessionId) {
-      alert("세션 정보가 없어 수정할 수 없어요 🥲");
+      alert("세션 정보가 없어 수정할 수 없어요.");
       return;
     }
     if (!editingTargetDbId) {
-      alert("수정 대상 메시지를 찾을 수 없어요 🥲");
+      alert("수정 대상 메시지를 찾을 수 없어요.");
       return;
     }
 
-    // 타자/오디오/캐시/확장 상태 정리
     if (typingIntervalRef.current) clearInterval(typingIntervalRef.current);
     stopAllAudio();
     clearAudioCache();
@@ -1128,7 +1087,7 @@ export default function ChatWindow() {
       if (err === "ONLY_LAST_USER_MESSAGE_CAN_BE_REWRITTEN") {
         alert("마지막 내 메시지만 수정할 수 있어요.");
       } else {
-        alert("메시지 수정에 실패했어요 🥲");
+        alert("메시지 수정에 실패했어요.");
       }
       return;
     }
@@ -1148,7 +1107,6 @@ export default function ChatWindow() {
     shouldAutoScrollRef.current = true;
     setMessages(restored);
 
-    // 수정모드 종료
     setIsEditing(false);
     setEditingTargetDbId(null);
     setInput("");
@@ -1159,7 +1117,7 @@ export default function ChatWindow() {
     if (!hasStarted) return;
     if (!input.trim() || isSending) return;
 
-    // ✅ 수정모드면 rewrite로 처리 (타임라인 다시쓰기)
+    // ✅ 수정모드면 rewrite로 처리
     if (isEditing) {
       const trimmed = input.trim();
       setIsSending(true);
@@ -1167,7 +1125,7 @@ export default function ChatWindow() {
         await rewriteLastUser(trimmed);
       } catch (e) {
         console.error("rewrite exception:", e);
-        alert("메시지 수정 중 오류가 발생했어요 🥲");
+        alert("메시지 수정 중 오류가 발생했어요.");
       } finally {
         setIsSending(false);
       }
@@ -1302,10 +1260,7 @@ export default function ChatWindow() {
       }
     } catch (e) {
       console.error(e);
-      setMessages((prev) => [
-        ...prev,
-        { id: makeId(), role: "assistant", content: "응답을 가져오는 데 문제가 생겼어. 잠시 후 다시 시도해 줘 🙏" },
-      ]);
+      setMessages((prev) => [...prev, { id: makeId(), role: "assistant", content: "오류가 발생했어요." }]);
       shouldAutoScrollRef.current = true;
     } finally {
       setIsSending(false);
@@ -1397,9 +1352,7 @@ export default function ChatWindow() {
           <h3 style={{ fontSize: "18px", color: "#f9fafb", marginBottom: "12px" }}>
             1단계. 대화할 언어를 선택해 주세요.
           </h3>
-          <p style={{ fontSize: "13px", color: "#9ca3af", marginBottom: "10px" }}>
-            어떤 언어로 대화를 연습하고 싶나요?
-          </p>
+          <p style={{ fontSize: "13px", color: "#9ca3af", marginBottom: "10px" }}>어떤 언어로 대화를 연습하고 싶나요?</p>
 
           <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", marginBottom: "16px" }}>
             {[
@@ -1510,9 +1463,7 @@ export default function ChatWindow() {
           <h3 style={{ fontSize: "18px", color: "#f9fafb", marginBottom: "12px" }}>
             3단계. 어떤 스타일의 대화 상대가 좋나요?
           </h3>
-          <p style={{ fontSize: "13px", color: "#9ca3af", marginBottom: "10px" }}>
-            상대의 말투와 역할을 골라보세요.
-          </p>
+          <p style={{ fontSize: "13px", color: "#9ca3af", marginBottom: "10px" }}>상대의 말투와 역할을 골라보세요.</p>
 
           <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginBottom: "16px" }}>
             {[
@@ -1589,9 +1540,7 @@ export default function ChatWindow() {
 
     return (
       <div>
-        <h3 style={{ fontSize: "18px", color: "#f9fafb", marginBottom: "12px" }}>
-          4단계. 이 설정으로 대화를 시작할까요?
-        </h3>
+        <h3 style={{ fontSize: "18px", color: "#f9fafb", marginBottom: "12px" }}>4단계. 이 설정으로 대화를 시작할까요?</h3>
         <p style={{ fontSize: "13px", color: "#9ca3af", marginBottom: "12px" }}>
           아래 설정으로 첫 인사를 보낸 뒤, 자유롭게 대화를 이어갈 수 있어요.
         </p>
@@ -1641,16 +1590,12 @@ export default function ChatWindow() {
               borderRadius: "999px",
               border: "none",
               backgroundColor:
-                !selectedLanguage || !selectedLevel || !selectedPersona || isCreatingConfiguredSession
-                  ? "#4b5563"
-                  : "#22c55e",
+                !selectedLanguage || !selectedLevel || !selectedPersona || isCreatingConfiguredSession ? "#4b5563" : "#22c55e",
               color: "#f9fafb",
               fontSize: "13px",
               fontWeight: 500,
               cursor:
-                !selectedLanguage || !selectedLevel || !selectedPersona || isCreatingConfiguredSession
-                  ? "not-allowed"
-                  : "pointer",
+                !selectedLanguage || !selectedLevel || !selectedPersona || isCreatingConfiguredSession ? "not-allowed" : "pointer",
             }}
           >
             {isCreatingConfiguredSession ? "대화 시작 준비 중..." : "이 설정으로 대화 시작하기"}
@@ -1906,71 +1851,23 @@ export default function ChatWindow() {
                         )}
                       </div>
 
+                      {/* ✅ 더보기 영역은 MessageDetailsMore로 분리 */}
                       {isExpanded && (
-                        <div
-                          style={{
-                            padding: "10px 12px",
-                            borderRadius: "8px",
-                            backgroundColor: "#181818",
-                            color: "#ddd",
-                            fontSize: "13px",
-                            lineHeight: 1.5,
+                        <MessageDetailsMore
+                          msg={{
+                            id: msg.id,
+                            role: msg.role,
+                            content: msg.content,
+                            details: msg.details,
+                            isDetailsLoading: msg.isDetailsLoading,
+                            detailsError: msg.detailsError,
                           }}
-                        >
-                          {msg.isDetailsLoading ? (
-                            <div>상세 내용을 불러오는 중이에요… ⏳</div>
-                          ) : msg.detailsError ? (
-                            <div>
-                              <div style={{ marginBottom: "6px" }}>상세 정보를 불러오지 못했어요 🥲</div>
-                              <button
-                                onClick={() =>
-                                  isUserMsg ? loadUserDetails(msg.id, msg.content) : loadDetails(msg.id, msg.content)
-                                }
-                                style={{
-                                  marginTop: "4px",
-                                  fontSize: "13px",
-                                  padding: "4px 8px",
-                                  borderRadius: "999px",
-                                  border: "1px solid #555",
-                                  backgroundColor: "#111",
-                                  color: "white",
-                                  cursor: "pointer",
-                                }}
-                              >
-                                🔄 상세 다시 시도
-                              </button>
-                            </div>
-                          ) : (
-                            <>
-                              {isUserMsg && msg.details?.correction && (
-                                <div style={{ marginBottom: "6px" }}>
-                                  <strong>0. 문장 교정</strong>
-                                  <div style={{ marginTop: "2px", whiteSpace: "pre-wrap" }}>{msg.details.correction}</div>
-                                </div>
-                              )}
-
-                              <div style={{ marginBottom: "6px" }}>
-                                <strong>1. 한글 번역</strong>
-                                <div style={{ marginTop: "2px", whiteSpace: "pre-wrap" }}>{msg.details?.ko}</div>
-                              </div>
-
-                              <div style={{ marginBottom: "6px" }}>
-                                <strong>2. 영어 번역</strong>
-                                <div style={{ marginTop: "2px", whiteSpace: "pre-wrap" }}>{msg.details?.en}</div>
-                              </div>
-
-                              <div style={{ marginBottom: "6px" }}>
-                                <strong>3. 문법 설명</strong>
-                                <div style={{ marginTop: "2px", whiteSpace: "pre-wrap" }}>{msg.details?.grammar}</div>
-                              </div>
-
-                              <div>
-                                <strong>4. 네이티브 TIP</strong>
-                                <div style={{ marginTop: "2px", whiteSpace: "pre-wrap" }}>{msg.details?.tip}</div>
-                              </div>
-                            </>
-                          )}
-                        </div>
+                          isUserMsg={isUserMsg}
+                          onRetry={() => {
+                            if (isUserMsg) loadUserDetails(msg.id, msg.content);
+                            else loadDetails(msg.id, msg.content);
+                          }}
+                        />
                       )}
                     </div>
                   </div>
@@ -2282,14 +2179,14 @@ export default function ChatWindow() {
                   const data = await res.json().catch(() => null);
                   if (!res.ok || !data?.ok) {
                     console.error("launch-request failed:", data);
-                    alert("요청 저장에 실패했어요 🥲");
+                    alert("요청 저장에 실패했어요.");
                     return;
                   }
 
                   setLaunchRequestedDone(true);
                 } catch (e) {
                   console.error("launch-request error:", e);
-                  alert("요청 저장 중 오류가 발생했어요 🥲");
+                  alert("요청 저장 중 오류가 발생했어요.");
                 } finally {
                   setIsLaunchRequesting(false);
                 }
@@ -2413,12 +2310,10 @@ export default function ChatWindow() {
         </div>
       )}
 
-      {/* 📚 학습 모달 */}
+      {/* 📚 학습 모달 (기존 그대로: 분리 안 함) */}
       <StudyModal
         isOpen={isStudyModalOpen}
-        onClose={() => {
-          setIsStudyModalOpen(false);
-        }}
+        onClose={() => setIsStudyModalOpen(false)}
         card={activeStudyCard}
         sessionId={sessionId}
         canUseTTS={!isGuest && ttsEnabled}
@@ -2428,6 +2323,10 @@ export default function ChatWindow() {
     </>
   );
 }
+
+/* =========================
+   StudyModal (기존 그대로)
+========================= */
 
 type StudyModalProps = {
   isOpen: boolean;
@@ -2539,12 +2438,12 @@ function StudyModal({
     }
 
     if (!sessionId) {
-      alert("세션 정보가 없어 음성을 재생할 수 없어요 🥲");
+      alert("세션 정보가 없어 음성을 재생할 수 없어요.");
       return;
     }
 
     if (!card.ttsKey) {
-      alert("메시지 정보가 없어 음성을 재생할 수 없어요 🥲");
+      alert("메시지 정보가 없어 음성을 재생할 수 없어요.");
       return;
     }
 
@@ -2753,7 +2652,7 @@ function StudyModal({
               <span>{feedback.tip}</span>
             </div>
             <div style={{ marginTop: "4px", fontSize: "11px", color: "#9ca3af" }}>
-              채점 결과: {feedback.is_correct ? "거의 정답이에요! 👏" : "조금 더 연습해보자 🙂"}
+              채점 결과: {feedback.is_correct ? "거의 정답이에요!" : "조금 더 연습해보자"}
             </div>
           </div>
         )}
