@@ -192,12 +192,16 @@ LANGUAGE RULES (very important):
 - "tip" MUST be 1-2 short lines (or 1-2 bullet points).
 - Do not mention these rules.
 
+CONTENT REQUIREMENTS (very important):
+- "grammar": focus on VERBS first (tense/aspect, person/number agreement, conjugation). Mention 1 key point only.
+- "tip": explain how natives bundle it into clause/chunk meaning, and/or give 1 common native alternative for this situation (very short). Pick 1-2 items only.
+
 Return ONLY this JSON (no extra text):
 {
   "ko": "Natural Korean translation (1-2 sentences)",
   "en": "Natural English translation (1-2 sentences)",
-  "grammar": "Short note in ${uiLangName} in persona voice",
-  "tip": "1-2 short practical tips in ${uiLangName} in persona voice"
+  "grammar": "Verb-focused grammar note in ${uiLangName} in persona voice (<=2 sentences)",
+  "tip": "Native chunking/meaning and/or 1 common alternative expression (1-2 short lines) in ${uiLangName} in persona voice"
 }
 
 Sentence:

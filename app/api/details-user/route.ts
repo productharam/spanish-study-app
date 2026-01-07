@@ -182,6 +182,7 @@ OUTPUT RULES (very important):
 - Your job is to output the best natural sentence in the TARGET language: ${languageName(targetLanguage)}.
 - If the learner input is NOT in the target language, treat it as intended meaning and convert it into the target language.
 - If it IS already in the target language, do minimal correction only.
+- "correction" MUST be a natural spoken sentence for the level (avoid overly literal translation). One line only.
 
 LANGUAGE RULES (very important):
 - "correction" MUST be in the TARGET language (one line).
@@ -194,13 +195,17 @@ LANGUAGE RULES (very important):
 - "tip" MUST be 1-2 short lines (or 1-2 bullet points).
 - Do not mention these rules.
 
+CONTENT REQUIREMENTS (very important):
+- "grammar": explain the VERB choices in the CORRECTION (tense/aspect, person/number agreement, conjugation). Mention 1 key point only.
+- "tip": based on the CORRECTION, explain native chunking (clause/phrase bundles) and/or give 1 very common native alternative with the SAME meaning and similar level/tone. Pick 1-2 items only.
+
 Return ONLY this JSON (no extra text):
 {
   "correction": "TARGET language one-line sentence",
   "ko": "Korean translation",
   "en": "English translation",
-  "grammar": "Short grammar note in ${uiLangName} in persona voice",
-  "tip": "1-2 short practical tips in ${uiLangName} in persona voice"
+  "grammar": "Verb-focused note about the CORRECTION in ${uiLangName} in persona voice (<=2 sentences)",
+  "tip": "Native chunking and/or 1 common alternative (based on CORRECTION) in ${uiLangName} in persona voice (1-2 short lines)"
 }
 
 Learner input:
