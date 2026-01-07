@@ -820,24 +820,35 @@ export default function ChatWindow() {
   };
 
   // ✅ 학습 모드 시작
-  const handleStartStudy = async (message: ChatMessage) => {
-    if (isGuest) {
-      alert("학습 기능은 로그인 후 사용할 수 있어요 🙂");
-      return;
-    }
+const handleStartStudy = async (message: ChatMessage) => {
+  if (isGuest) {
+    alert("학습 기능은 로그인 후 사용할 수 있어요 🙂");
+    return;
+  }
 
-    const messageKey = getMessageKey(message);
-    const existing = studyState[messageKey];
-    if (existing) {
-      setActiveStudyKey(messageKey);
-      setIsStudyModalOpen(true);
-      return;
-    }
+  if (!sessionId) {
+    alert("세션 정보가 없어서 학습을 시작할 수 없어요 🥲");
+    return;
+  }
 
-    try {
-      setIsStudyLoading(true);
+  if (!message.dbId) {
+    alert("메시지 저장이 완료되지 않았어요. 잠시 후 다시 시도해 주세요.");
+    return;
+  }
 
-      let baseSpanish = "";
+  const messageKey = getMessageKey(message);
+  const existing = studyState[messageKey];
+  if (existing) {
+    setActiveStudyKey(messageKey);
+    setIsStudyModalOpen(true);
+    return;
+  }
+
+  try {
+    setIsStudyLoading(true);
+
+    let baseSpanish = "";
+
 
       if (message.role === "user") {
         if (!message.details?.correction) {
@@ -882,13 +893,18 @@ export default function ChatWindow() {
       const accessToken = await getAccessToken();
 
       const prepRes = await fetch("/api/learning/prepare", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
-        },
-        body: JSON.stringify({ text: baseSpanish, sessionId }),
-      });
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json",
+    ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+  },
+  body: JSON.stringify({
+    text: baseSpanish,
+    sessionId,
+    messageId: message.dbId, // ✅ DB chat_messages.id
+  }),
+});
+
 
       const prep = await prepRes.json().catch(() => null);
       if (!prepRes.ok || !prep || prep.ok === false) {
