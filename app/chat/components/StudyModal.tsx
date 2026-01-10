@@ -17,7 +17,7 @@ type Props = {
   sessionId: string | null;
   canUseTTS: boolean;
   isGuest: boolean;
-  onOpenLaunchRequestModal: () => void;
+  onUsageLimit: (type: "chat" | "tts" | "learning") => void;
 };
 
 export default function StudyModal({
@@ -27,7 +27,7 @@ export default function StudyModal({
   sessionId,
   canUseTTS,
   isGuest,
-  onOpenLaunchRequestModal,
+  onUsageLimit,
 }: Props) {
   const [answer, setAnswer] = useState("");
   const [feedback, setFeedback] = useState<{
@@ -89,7 +89,19 @@ export default function StudyModal({
       });
 
       if (!res.ok) {
-        console.error("learning/answer error:", await res.json().catch(() => ({})));
+        const errJson = await res.json().catch(() => ({}));
+        console.error("learning/answer error:", errJson);
+
+        if (res.status === 401) {
+          alert("로그인이 필요해요 🙂");
+          return;
+        }
+
+        if (res.status === 403 && errJson?.code === "LEARNING_LIMIT_EXCEEDED") {
+          onUsageLimit("learning");
+          return;
+        }
+
         alert("피드백을 불러오는 데 실패했어요.");
         return;
       }
@@ -115,7 +127,7 @@ export default function StudyModal({
         alert("TTS는 로그인 후 사용할 수 있어요 🙂");
         return;
       }
-      onOpenLaunchRequestModal();
+      alert("음성 기능은 현재 사용할 수 없어요.");
       return;
     }
 
@@ -182,7 +194,23 @@ export default function StudyModal({
       if (res.status === 401 || res.status === 403) {
         const blocked = await res.json().catch(() => null);
         console.warn("StudyModal TTS blocked:", blocked);
-        onOpenLaunchRequestModal();
+
+        if (res.status === 401) {
+          alert("로그인이 필요해요 🙂");
+          return;
+        }
+
+        // 403: 권한/사용량 제한
+        if (blocked?.code === "TTS_LIMIT_EXCEEDED") {
+          onUsageLimit("tts");
+          return;
+        }
+        if (blocked?.code === "TTS_NOT_ENABLED") {
+          alert("음성 기능은 현재 사용할 수 없어요.");
+          return;
+        }
+
+        alert("음성을 재생할 수 없어요.");
         return;
       }
 

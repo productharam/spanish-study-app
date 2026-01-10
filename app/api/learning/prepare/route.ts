@@ -187,6 +187,28 @@ export async function POST(req: NextRequest) {
         });
       }
     }
+    
+// ✅ learning 사용량 차감 (GPT 생성 직전, 캐시 미스 이후)
+const { data: canUseLearning, error: usageErr } =
+  await supabaseServer.rpc("consume_usage_quota", {
+    p_user_id: userId,
+    p_usage_type: "learning",
+  });
+
+if (usageErr) {
+  console.error("consume_usage_quota(learning) error:", usageErr);
+  return NextResponse.json(
+    { ok: false, code: "USAGE_CHECK_FAILED" },
+    { status: 500 }
+  );
+}
+
+if (!canUseLearning) {
+  return NextResponse.json(
+    { ok: false, code: "LEARNING_LIMIT_EXCEEDED" },
+    { status: 403 }
+  );
+}
 
     // ✅ 2) GPT 생성
     const { korean } = await generateKoreanPrompt(language, baseSentence);

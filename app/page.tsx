@@ -388,9 +388,9 @@ export default function Home() {
                 }}
               >
                 <p style={{ color: "#9ca3af", fontSize: "14px", margin: 0, lineHeight: 1.7 }}>
-                  로그인 없이 가볍게 체험하거나,
+                  체험모드에서는 대화가 저장되지 않아요 :(
                   <br />
-                  로그인 후 대화 기록을 저장할 수 있어요.
+                  로그인 후 자유롭게 이용해보세요!
                 </p>
 
                 <div
@@ -415,7 +415,7 @@ export default function Home() {
                       minWidth: "200px",
                     }}
                   >
-                    대화 체험하기
+                    체험하기
                   </button>
 
                   <button
@@ -489,7 +489,7 @@ export default function Home() {
                     minWidth: "200px",
                   }}
                 >
-                  대화 체험하기
+                  체험하기
                 </button>
 
                 <button

@@ -1,7 +1,7 @@
-// app/chat/components/sound.tsx
+// app/chat/components/Sound.tsx
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 export type SoundChatMessage = {
   id: string; // 프론트 임시 id
@@ -10,6 +10,8 @@ export type SoundChatMessage = {
   content: string;
 };
 
+type UsageLimitType = "chat" | "tts" | "learning";
+
 type UseSoundParams = {
   sessionId: string | null;
   isGuest: boolean;
@@ -17,7 +19,7 @@ type UseSoundParams = {
   isProfileLoading: boolean;
 
   getAccessToken: () => Promise<string | null>;
-  openLaunchRequestModal: () => void;
+  onUsageLimit?: (type: UsageLimitType) => void; // ✅ 상위(ChatWindow)에서 "오늘 사용량..." UI 띄우기
 };
 
 export function useSoundTTS({
@@ -26,7 +28,7 @@ export function useSoundTTS({
   ttsEnabled,
   isProfileLoading,
   getAccessToken,
-  openLaunchRequestModal,
+  onUsageLimit,
 }: UseSoundParams) {
   // ✅ 캐시: audioId -> url
   const audioCacheRef = useRef<Map<string, string>>(new Map());
@@ -62,12 +64,13 @@ export function useSoundTTS({
       if (isProfileLoading) return;
 
       if (isGuest) {
-        alert("TTS는 로그인 후 사용할 수 있어요 🙂");
+        alert("음성 기능은 로그인 후 사용할 수 있어요.");
         return;
       }
 
+      // ✅ 회원이지만 플랜/설정상 비활성인 경우: 출시모달 삭제 → 알럿만
       if (!ttsEnabled) {
-        openLaunchRequestModal();
+        alert("음성 기능은 현재 사용할 수 없어요.");
         return;
       }
 
@@ -132,16 +135,29 @@ export function useSoundTTS({
         }),
       });
 
-      if (res.status === 401 || res.status === 403) {
-        const data = await res.json().catch(() => null);
-        console.warn("TTS blocked:", data);
-        setPlayingMessageKey(null);
-        openLaunchRequestModal();
-        return;
-      }
-
+      // ✅ 제한/차단 처리 (출시모달 삭제)
       if (!res.ok) {
         const data = await res.json().catch(() => null);
+
+        if (res.status === 403) {
+          if (data?.code === "TTS_LIMIT_EXCEEDED") {
+            onUsageLimit?.("tts");
+            setPlayingMessageKey(null);
+            return;
+          }
+          if (data?.code === "TTS_NOT_ENABLED") {
+            alert("음성 기능은 현재 사용할 수 없어요.");
+            setPlayingMessageKey(null);
+            return;
+          }
+        }
+
+        if (res.status === 401) {
+          alert("로그인이 필요해요 🙂");
+          setPlayingMessageKey(null);
+          return;
+        }
+
         console.error("TTS 요청 실패:", data);
         throw new Error("TTS 요청 실패");
       }

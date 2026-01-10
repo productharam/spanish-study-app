@@ -9,7 +9,6 @@ const client = new OpenAI({
 
 import { isConsentAccepted } from "@/lib/consent";
 
-
 function languageName(code: string) {
   switch (code) {
     case "en":
@@ -443,7 +442,9 @@ export async function POST(req: NextRequest) {
 
     const language = normalizeLanguage(cfg?.language ?? bodyLanguage ?? "es");
     const level = normalizeLevel(cfg?.level ?? bodyLevel ?? "beginner");
-    const personaType = normalizePersona(cfg?.personaType ?? bodyPersonaType ?? "friend");
+    const personaType = normalizePersona(
+      cfg?.personaType ?? bodyPersonaType ?? "friend"
+    );
 
     // ✅ hard injection만 서버에서 즉시 리다이렉트
     if (!isFirst && Array.isArray(messages)) {
@@ -558,7 +559,29 @@ ${levelGuide(level)}
 
       finalMessages.push(...recent);
     }
+// ✅ chat 사용량 차감 (OpenAI 호출 직전)
+if (consentRes.userId) {
+  const { data: canUseChat, error: usageErr } =
+    await supabaseServer.rpc("consume_usage_quota", {
+      p_user_id: consentRes.userId,
+      p_usage_type: "chat",
+    });
 
+  if (usageErr) {
+    console.error("consume_usage_quota(chat) error:", usageErr);
+    return NextResponse.json(
+      { ok: false, code: "USAGE_CHECK_FAILED" },
+      { status: 500 }
+    );
+  }
+
+  if (!canUseChat) {
+    return NextResponse.json(
+      { ok: false, code: "CHAT_LIMIT_EXCEEDED" },
+      { status: 403 }
+    );
+  }
+}
     const completion = await client.chat.completions.create({
       model: "gpt-5.1",
       messages: finalMessages,
