@@ -7,10 +7,8 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import MessageDetailsMore from "./MessageDetailsMore";
 import { useSoundTTS } from "./Sound";
+import { isConsentAccepted } from "@/lib/consent";
 
-const TERMS_VERSION = "2025-12-30";
-const PRIVACY_VERSION = "2025-12-30";
-const COLLECTION_VERSION = "2025-12-30";
 
 type MessageDetails = {
   correction?: string; // 0. 스페인어 문장 교정 (내 말풍선 전용)
@@ -307,11 +305,8 @@ export default function ChatWindow() {
           .eq("user_id", user.id)
           .maybeSingle();
 
-        const ok =
-          !!consent &&
-          consent.terms_version === TERMS_VERSION &&
-          consent.privacy_version === PRIVACY_VERSION &&
-          consent.collection_version === COLLECTION_VERSION;
+const ok = isConsentAccepted(consent);
+
 
         if (error) console.error("ChatWindow consent select error:", error);
 

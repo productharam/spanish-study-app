@@ -4,10 +4,9 @@
 import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
+import { isConsentAccepted } from "@/lib/consent";
 
-const TERMS_VERSION = "2025-12-30";
-const PRIVACY_VERSION = "2025-12-30";
-const COLLECTION_VERSION = "2025-12-30";
+
 
 export default function AuthCallbackClient() {
   const router = useRouter();
@@ -57,12 +56,9 @@ export default function AuthCallbackClient() {
           .eq("user_id", user.id)
           .maybeSingle();
 
-        const ok =
-          !!consent &&
-          consent.terms_version === TERMS_VERSION &&
-          consent.privacy_version === PRIVACY_VERSION &&
-          consent.collection_version === COLLECTION_VERSION;
+          const ok = isConsentAccepted(consent);
 
+          
         if (!ok) {
           router.replace(`/join/consent?next=${encodeURIComponent("/")}`);
           return;

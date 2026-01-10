@@ -5,9 +5,8 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 
-const TERMS_VERSION = "2026-01-05"; // ✅ 약관 내용 변경으로 버전 업데이트
-const PRIVACY_VERSION = "2025-12-30";
-const COLLECTION_VERSION = "2025-12-30";
+import { TERMS_VERSION, PRIVACY_VERSION, COLLECTION_VERSION } from "@/lib/consent";
+
 
 type DocKey = "terms" | "privacy" | "collection" | null;
 

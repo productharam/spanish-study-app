@@ -5,9 +5,8 @@ import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import type { User } from "@supabase/supabase-js";
 
-const TERMS_VERSION = "2025-12-30";
-const PRIVACY_VERSION = "2025-12-30";
-const COLLECTION_VERSION = "2025-12-30";
+import { isConsentAccepted } from "@/lib/consent";
+
 
 type SessionSummary = {
   id: string;
@@ -96,11 +95,8 @@ export default function Home() {
         return;
       }
 
-      const isAccepted =
-        !!consent &&
-        consent.terms_version === TERMS_VERSION &&
-        consent.privacy_version === PRIVACY_VERSION &&
-        consent.collection_version === COLLECTION_VERSION;
+const isAccepted = isConsentAccepted(consent);
+
 
       if (!isAccepted) {
         router.replace("/join/consent");

@@ -7,9 +7,8 @@ const client = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY!,
 });
 
-const TERMS_VERSION = "2025-12-30";
-const PRIVACY_VERSION = "2025-12-30";
-const COLLECTION_VERSION = "2025-12-30";
+import { isConsentAccepted } from "@/lib/consent";
+
 
 function languageName(code: string) {
   switch (code) {
@@ -355,11 +354,8 @@ async function assertConsentIfLoggedIn(req: NextRequest) {
     };
   }
 
-  const isAccepted =
-    !!consent &&
-    consent.terms_version === TERMS_VERSION &&
-    consent.privacy_version === PRIVACY_VERSION &&
-    consent.collection_version === COLLECTION_VERSION;
+const isAccepted = isConsentAccepted(consent);
+
 
   if (!isAccepted) {
     return { ok: false as const, status: 403, code: "CONSENT_REQUIRED" as const };
