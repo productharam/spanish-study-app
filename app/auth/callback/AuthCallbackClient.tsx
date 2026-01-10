@@ -51,10 +51,11 @@ export default function AuthCallbackClient() {
         }
 
         const { data: consent } = await supabase
-          .from("user_consents")
-          .select("terms_version, privacy_version, collection_version")
-          .eq("user_id", user.id)
-          .maybeSingle();
+  .from("profiles")
+  .select("terms_version, privacy_version, collection_version, consented_at")
+  .eq("user_id", user.id)
+  .maybeSingle();
+
 
           const ok = isConsentAccepted(consent);
 

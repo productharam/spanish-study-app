@@ -32,17 +32,17 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: false, code: "CONSENT_REQUIRED" }, { status: 400 });
     }
 
-    const { error } = await supabaseServer
-      .from("launch_requests")
-      .upsert(
-        {
-          user_id: user.id,
-          email,
-          feature,
-          consent_email_collection: true,
-        },
-        { onConflict: "user_id,feature" }
-      );
+    const now = new Date().toISOString();
+
+const { error } = await supabaseServer
+  .from("profiles")
+  .update({
+    email,
+    launch_request_at: now,
+  })
+  .eq("user_id", user.id)
+  .is("launch_request_at", null);
+
 
     if (error) {
       console.error("launch_requests upsert error:", error);

@@ -300,10 +300,10 @@ export default function ChatWindow() {
 
       try {
         const { data: consent, error } = await supabase
-          .from("user_consents")
-          .select("terms_version, privacy_version, collection_version")
-          .eq("user_id", user.id)
-          .maybeSingle();
+  .from("profiles")
+  .select("terms_version, privacy_version, collection_version, consented_at")
+  .eq("user_id", user.id)
+  .maybeSingle();
 
 const ok = isConsentAccepted(consent);
 

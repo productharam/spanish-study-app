@@ -145,16 +145,22 @@ export default function ConsentClient() {
 
     setSaving(true);
     try {
-      const { error } = await supabase.from("user_consents").upsert(
-        {
-          user_id: userId,
-          terms_version: TERMS_VERSION,
-          privacy_version: PRIVACY_VERSION,
-          collection_version: COLLECTION_VERSION,
-          accepted_at: new Date().toISOString(),
-        },
-        { onConflict: "user_id" }
-      );
+      // ✅ 이메일은 profiles NOT NULL일 가능성 때문에 같이 넣는 게 안전
+const { data: u } = await supabase.auth.getUser();
+const email = u.user?.email ?? "";
+
+const { error } = await supabase.from("profiles").upsert(
+  {
+    user_id: userId,
+    email,
+    terms_version: TERMS_VERSION,
+    privacy_version: PRIVACY_VERSION,
+    collection_version: COLLECTION_VERSION,
+    consented_at: new Date().toISOString(),
+  },
+  { onConflict: "user_id" }
+);
+
 
       if (error) throw error;
 

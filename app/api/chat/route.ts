@@ -340,10 +340,10 @@ async function assertConsentIfLoggedIn(req: NextRequest) {
   const userId = data.user.id;
 
   const { data: consent, error: consentErr } = await supabaseServer
-    .from("user_consents")
-    .select("terms_version, privacy_version, collection_version")
-    .eq("user_id", userId)
-    .maybeSingle();
+  .from("profiles")
+  .select("terms_version, privacy_version, collection_version, consented_at")
+  .eq("user_id", userId)
+  .maybeSingle();
 
   if (consentErr) {
     console.error("Consent check error(/api/chat):", consentErr);

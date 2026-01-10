@@ -83,10 +83,10 @@ export default function Home() {
       if (!user) return; // 비로그인
 
       const { data: consent, error } = await supabase
-        .from("user_consents")
-        .select("terms_version, privacy_version, collection_version")
-        .eq("user_id", user.id)
-        .maybeSingle();
+  .from("profiles")
+  .select("terms_version, privacy_version, collection_version, consented_at")
+  .eq("user_id", user.id)
+  .maybeSingle(); 
 
       if (error) {
         console.error("Consent check error (home):", error);
