@@ -1,3 +1,5 @@
+// /app/page.tsx
+
 "use client";
 
 import { useEffect, useState } from "react";
@@ -6,7 +8,7 @@ import { supabase } from "@/lib/supabaseClient";
 import type { User } from "@supabase/supabase-js";
 
 import { isConsentAccepted } from "@/lib/consent";
-
+import PlanModal, { type Plan } from "@/app/components/planmodal";
 
 type SessionSummary = {
   id: string;
@@ -47,6 +49,10 @@ export default function Home() {
   const [isDeletingAccount, setIsDeletingAccount] = useState(false);
   const [deleteAccountError, setDeleteAccountError] = useState<string | null>(null);
 
+  // ✅ Plan UI state
+  const [currentPlan, setCurrentPlan] = useState<Plan>("standard");
+  const [isPlanModalOpen, setIsPlanModalOpen] = useState(false);
+
   useEffect(() => {
     const handleResize = () => {
       setIsNarrow(window.innerWidth < 900);
@@ -76,17 +82,17 @@ export default function Home() {
     };
   }, []);
 
-  // ✅ (추가) 로그인 유저는 반드시 약관 동의 체크
+  // ✅ (추가) 로그인 유저는 반드시 약관 동의 체크 + plan 로드
   useEffect(() => {
     const checkConsent = async () => {
       if (user === undefined) return; // 로딩 중
       if (!user) return; // 비로그인
 
-      const { data: consent, error } = await supabase
-  .from("profiles")
-  .select("terms_version, privacy_version, collection_version, consented_at")
-  .eq("user_id", user.id)
-  .maybeSingle(); 
+      const { data: profile, error } = await supabase
+        .from("profiles")
+        .select("terms_version, privacy_version, collection_version, consented_at, plan")
+        .eq("user_id", user.id)
+        .maybeSingle();
 
       if (error) {
         console.error("Consent check error (home):", error);
@@ -95,12 +101,14 @@ export default function Home() {
         return;
       }
 
-const isAccepted = isConsentAccepted(consent);
-
+      const isAccepted = isConsentAccepted(profile);
 
       if (!isAccepted) {
         router.replace("/join/consent");
+        return;
       }
+
+      if (profile?.plan) setCurrentPlan(profile.plan as Plan);
     };
 
     checkConsent();
@@ -548,62 +556,111 @@ const isAccepted = isConsentAccepted(consent);
 
               <div style={{ width: isNarrow ? "100%" : "auto" }}>
                 {isUserLoading ? (
-                  <span style={{ color: "#9ca3af", fontSize: "13px" }}>사용자 정보를 불러오는 중...</span>
-                ) : user ? (
-                  <div
-                    style={{
-                      display: "flex",
-                      flexDirection: isNarrow ? "row" : "column",
-                      alignItems: isNarrow ? "center" : "flex-end",
-                      justifyContent: isNarrow ? "space-between" : "flex-end",
-                      gap: isNarrow ? 8 : 6,
-                      width: isNarrow ? "100%" : "auto",
-                    }}
-                  >
-                    <span
-                      style={{
-                        color: "#e5e7eb",
-                        fontSize: "13px",
-                        wordBreak: "break-all",
-                      }}
-                    >
-                      {user.email} 님
-                    </span>
+  <span style={{ color: "#9ca3af", fontSize: "13px" }}>사용자 정보를 불러오는 중...</span>
+) : user ? (
+  <div
+    style={{
+      display: "flex",
+      flexDirection: "row", // ✅ 항상 row
+      alignItems: "flex-start",
+      justifyContent: "space-between",
+      gap: 12,
+      width: "100%",
+    }}
+  >
+    {/* ✅ 왼쪽: 이메일 + 플랜 */}
+    <div
+      style={{
+        minWidth: 0,
+        flex: 1,
+        display: "flex",
+        flexDirection: "column",
+        gap: 6,
+        alignItems: isNarrow ? "flex-start" : "flex-end",
+        textAlign: isNarrow ? "left" : "right",
+      }}
+    >
+      <span
+        style={{
+          color: "#e5e7eb",
+          fontSize: "13px",
+          wordBreak: "break-all",
+        }}
+      >
+        {user.email} 님
+      </span>
 
-                    <div style={{ display: "flex", gap: 8 }}>
-                      <button
-                        onClick={openSettings}
-                        style={{
-                          padding: "6px 12px",
-                          fontSize: "12px",
-                          borderRadius: "999px",
-                          border: "1px solid #4b5563",
-                          cursor: "pointer",
-                          backgroundColor: "transparent",
-                          color: "#e5e7eb",
-                        }}
-                      >
-                        설정
-                      </button>
+      {/* ✅ 이메일 아래: 현재 플랜 + 변경하기 */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "flex-start",
+          gap: 10,
+          width: "100%",
+        }}
+      >
+        <div style={{ color: "#9ca3af", fontSize: 12 }}>
+          현재 플랜:{" "}
+          <span style={{ color: "#e5e7eb", fontWeight: 800 }}>
+            {currentPlan.charAt(0).toUpperCase() + currentPlan.slice(1)}
+          </span>
+        </div>
 
-                      <button
-                        onClick={handleLogout}
-                        style={{
-                          padding: "6px 12px",
-                          fontSize: "12px",
-                          borderRadius: "999px",
-                          border: "1px solid #4b5563",
-                          cursor: "pointer",
-                          backgroundColor: "transparent",
-                          color: "#e5e7eb",
-                        }}
-                      >
-                        로그아웃
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <div style={{ height: 1 }} />
+        <button
+          onClick={() => setIsPlanModalOpen(true)}
+          style={{
+            padding: "6px 12px",
+            fontSize: "12px",
+            borderRadius: "999px",
+            border: "1px solid #4b5563",
+            cursor: "pointer",
+            backgroundColor: "transparent",
+            color: "#e5e7eb",
+            whiteSpace: "nowrap",
+            flexShrink: 0,
+          }}
+        >
+          변경하기
+        </button>
+      </div>
+    </div>
+
+    {/* ✅ 오른쪽: 설정/로그아웃 */}
+    <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
+      <button
+        onClick={openSettings}
+        style={{
+          padding: "6px 12px",
+          fontSize: "12px",
+          borderRadius: "999px",
+          border: "1px solid #4b5563",
+          cursor: "pointer",
+          backgroundColor: "transparent",
+          color: "#e5e7eb",
+        }}
+      >
+        설정
+      </button>
+
+      <button
+        onClick={handleLogout}
+        style={{
+          padding: "6px 12px",
+          fontSize: "12px",
+          borderRadius: "999px",
+          border: "1px solid #4b5563",
+          cursor: "pointer",
+          backgroundColor: "transparent",
+          color: "#e5e7eb",
+        }}
+      >
+        로그아웃
+      </button>
+    </div>
+  </div>
+) : (
+  <div style={{ height: 1 }} />
                 )}
               </div>
             </div>
@@ -947,6 +1004,15 @@ const isAccepted = isConsentAccepted(consent);
           </div>
         )}
       </main>
+
+      {/* ✅ PlanModal */}
+      {user && (
+        <PlanModal
+          open={isPlanModalOpen}
+          onClose={() => setIsPlanModalOpen(false)}
+          currentPlan={currentPlan}
+        />
+      )}
 
       <footer
         style={{
