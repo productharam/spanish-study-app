@@ -9,6 +9,7 @@ import MessageDetailsMore from "./MessageDetailsMore";
 import { useSoundTTS } from "./Sound";
 import { isConsentAccepted } from "@/lib/consent";
 import PlanModal, { type Plan } from "@/app/components/planmodal";
+import UsageLimitModal from "@/app/components/UsageLimitModal";
 import StudyModal from "./StudyModal";
 
 
@@ -52,6 +53,7 @@ export default function ChatWindow() {
   const [input, setInput] = useState("");
   const [isSending, setIsSending] = useState(false);
   const typingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const sendingRef = useRef(false);
   const [expandedMessageIds, setExpandedMessageIds] = useState<string[]>([]);
 
   // ✅ 스크롤 자동 이동(선택 포함)
@@ -102,10 +104,6 @@ export default function ChatWindow() {
   const [selectedLevel, setSelectedLevel] = useState<string | null>(null);
   const [selectedPersona, setSelectedPersona] = useState<string | null>(null);
   const [isCreatingConfiguredSession, setIsCreatingConfiguredSession] = useState(false);
-
-  // ✅ (추가) 마지막 메시지 수정 UX 상태
-  const [isEditing, setIsEditing] = useState(false);
-  const [editingTargetDbId, setEditingTargetDbId] = useState<string | null>(null);
 
   // ✅ messageKey: dbId 우선 (TTS/학습/캐시의 핵심 키)
   const getMessageKey = (m: ChatMessage) => m.dbId ?? m.id;
@@ -208,8 +206,6 @@ export default function ChatWindow() {
           setSelectedPersona(null);
 
           // ✅ 수정모드 초기화
-          setIsEditing(false);
-          setEditingTargetDbId(null);
 
           shouldAutoScrollRef.current = true;
           return;
@@ -231,9 +227,6 @@ export default function ChatWindow() {
           setSelectedPersona(null);
           setWizardStep(1);
 
-          setIsEditing(false);
-          setEditingTargetDbId(null);
-
           shouldAutoScrollRef.current = true;
         } else if (newParam === "1" && slotParam) {
           // 새 세션 시작 (위저드)
@@ -249,9 +242,6 @@ export default function ChatWindow() {
             setSelectedLanguage(null);
             setSelectedLevel(null);
             setSelectedPersona(null);
-
-            setIsEditing(false);
-            setEditingTargetDbId(null);
 
             shouldAutoScrollRef.current = true;
           } else {
@@ -435,9 +425,6 @@ const ok = isConsentAccepted(consent);
 
         setMessages(restored);
         setHasStarted(true);
-
-        setIsEditing(false);
-        setEditingTargetDbId(null);
       } catch (e) {
         console.error("loadExistingSession error:", e);
         setMessagesError("대화 내역을 불러오는 중 오류가 발생했어요.");
@@ -629,9 +616,6 @@ const ok = isConsentAccepted(consent);
     setSelectedLanguage(null);
     setSelectedLevel(null);
     setSelectedPersona(null);
-
-    setIsEditing(false);
-    setEditingTargetDbId(null);
     setInput("");
 
     shouldAutoScrollRef.current = true;
@@ -754,8 +738,9 @@ const ok = isConsentAccepted(consent);
         return;
       }
 
-      const accessToken = await getAccessToken();
+            const accessToken = await getAccessToken();
 
+      // ✅ 학습 카드 준비 API 호출
       const prepRes = await fetch("/api/learning/prepare", {
         method: "POST",
         headers: {
@@ -765,17 +750,35 @@ const ok = isConsentAccepted(consent);
         body: JSON.stringify({
           text: baseSpanish,
           sessionId,
-          messageId: message.dbId, // ✅ DB chat_messages.id
+          messageId: message.dbId,
         }),
       });
 
       const prep = await prepRes.json().catch(() => null);
-      if (!prepRes.ok || !prep || prep.ok === false) {
+
+      if (!prepRes.ok) {
+        // ✅ 학습 사용량 초과 → 사용량 모달
+        if (prepRes.status === 403 && prep?.code === "LEARNING_LIMIT_EXCEEDED") {
+          setUsageLimitType("learning");
+          return;
+        }
+
+        alert("학습 문장을 준비하는 중 오류가 발생했어요.");
+        return;
+      }
+
+      if (!prep || prep.ok === false) {
+        if (prep?.code === "LEARNING_LIMIT_EXCEEDED") {
+          setUsageLimitType("learning");
+          return;
+        }
+
         alert("학습 문장을 준비하는 중 오류가 발생했어요.");
         return;
       }
 
       const ttsKey = message.dbId ?? messageKey;
+
 
       setStudyState((prev) => ({
         ...prev,
@@ -835,9 +838,6 @@ const ok = isConsentAccepted(consent);
         setHasStarted(true);
         setSessionId(null);
 
-        setIsEditing(false);
-        setEditingTargetDbId(null);
-
         return;
       }
 
@@ -875,9 +875,6 @@ const ok = isConsentAccepted(consent);
       startTypewriter(formattedGreeting);
       setHasStarted(true);
       setChatFlow("existingSession");
-
-      setIsEditing(false);
-      setEditingTargetDbId(null);
     } catch (e) {
       console.error("handleStartConfiguredConversation error:", e);
       alert("처음 인사를 불러오는 데 문제가 생겼어요.");
@@ -886,130 +883,21 @@ const ok = isConsentAccepted(consent);
     }
   };
 
-  // ✅ 마지막 메시지 수정 시작/취소
-  const startEditLastUser = () => {
-    if (isGuest) return;
-    if (!hasStarted) return;
-    if (isSending) return;
-
-    const last = messages[messages.length - 1];
-    if (!last || last.role !== "user") return;
-    if (!last.dbId) {
-      alert("아직 메시지 저장이 완료되지 않았어요. 잠시 후 다시 시도해 주세요.");
-      return;
-    }
-
-    setIsEditing(true);
-    setEditingTargetDbId(last.dbId);
-    setInput(last.content);
-    shouldAutoScrollRef.current = true;
-  };
-
-  const cancelEdit = () => {
-    setIsEditing(false);
-    setEditingTargetDbId(null);
-    setInput("");
-  };
-
-  const canEditLastUser =
-    !isGuest &&
-    hasStarted &&
-    !isSending &&
-    messages.length > 0 &&
-    messages[messages.length - 1].role === "user" &&
-    !!messages[messages.length - 1].dbId;
-
-  // ✅ rewrite API 호출
-  const rewriteLastUser = async (newContent: string) => {
-    if (isGuest) return;
-    if (!sessionId) {
-      alert("세션 정보가 없어 수정할 수 없어요.");
-      return;
-    }
-    if (!editingTargetDbId) {
-      alert("수정 대상 메시지를 찾을 수 없어요.");
-      return;
-    }
-
-    if (typingIntervalRef.current) clearInterval(typingIntervalRef.current);
-    stopAllAudio();
-    clearAudioCache();
-    setExpandedMessageIds([]);
-    setStudyState({});
-    setActiveStudyKey(null);
-    setIsStudyModalOpen(false);
-
-    const accessToken = await getAccessToken();
-    if (!accessToken) {
-      alert("로그인이 필요해요 🙂");
-      return;
-    }
-
-    const res = await fetch("/api/rewrite", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${accessToken}`,
-      },
-      body: JSON.stringify({
-        sessionId,
-        targetMessageId: editingTargetDbId,
-        newContent,
-      }),
-    });
-
-    const data = await res.json().catch(() => null);
-
-    if (!res.ok || !data?.ok) {
-      console.error("rewrite error:", data);
-      const err = data?.error ?? "REWRITE_FAILED";
-      if (err === "ONLY_LAST_USER_MESSAGE_CAN_BE_REWRITTEN") {
-        alert("마지막 내 메시지만 수정할 수 있어요.");
-      } else {
-        alert("메시지 수정에 실패했어요.");
-      }
-      return;
-    }
-
-    const rows = data.messages ?? [];
-
-    const restored: ChatMessage[] = rows.map((m: any) => ({
-      id: makeId(),
-      dbId: m.id,
-      role: m.role,
-      content: m.content,
-      details: m.details ?? undefined,
-      isDetailsLoading: false,
-      detailsError: false,
-    }));
-
-    shouldAutoScrollRef.current = true;
-    setMessages(restored);
-
-    setIsEditing(false);
-    setEditingTargetDbId(null);
-    setInput("");
-  };
-
+  
   // 메시지 보내기
   const handleSend = async () => {
     if (!hasStarted) return;
-    if (!input.trim() || isSending) return;
 
-    // ✅ 수정모드면 rewrite로 처리
-    if (isEditing) {
-      const trimmed = input.trim();
-      setIsSending(true);
-      try {
-        await rewriteLastUser(trimmed);
-      } catch (e) {
-        console.error("rewrite exception:", e);
-        alert("메시지 수정 중 오류가 발생했어요.");
-      } finally {
-        setIsSending(false);
-      }
+    const trimmed = input.trim();
+    if (!trimmed) return;
+
+    // ✅ 이미 제한 상태면 바로 모달만
+    if (usageLimitType === "chat") {
+      setUsageLimitType("chat");
       return;
     }
+
+    if (sendingRef.current) return;
 
     // ✅ 게스트 체험: 최대 2회까지 말 걸기 가능
     if (isGuest && guestTrialCount >= 2) {
@@ -1017,31 +905,63 @@ const ok = isConsentAccepted(consent);
       return;
     }
 
-    const trimmed = input.trim();
-    const tempUserId = makeId();
-
-    const userMessage: ChatMessage = { id: tempUserId, role: "user", content: trimmed };
-
-    shouldAutoScrollRef.current = true;
-
-    const newMessages = [...messages, userMessage];
-    setMessages(newMessages);
-    setInput("");
-    setIsSending(true);
-
-    let currentSessionId = sessionId;
+    sendingRef.current = true;
+    setIsSending(true); // ✅ 여기로 올리기
+// (선택) 처리중 UI를 최소 1프레임 보여주고 싶으면
+await new Promise((r) => setTimeout(r, 0));
 
     try {
       const accessToken = !isGuest ? await getAccessToken() : null;
 
-      if (!isGuest) {
-        if (!currentSessionId) {
-          console.error("No sessionId in logged-in mode");
-          alert("세션 정보가 없어 대화를 이어갈 수 없어요. 홈에서 다시 접속해 주세요.");
-          setIsSending(false);
+      if (!isGuest && !sessionId) {
+        console.error("No sessionId in logged-in mode");
+        alert("세션 정보가 없어 대화를 이어갈 수 없어요. 홈에서 다시 접속해 주세요.");
+        return;
+      }
+
+      const tempUserId = makeId();
+      const userMessage: ChatMessage = { id: tempUserId, role: "user", content: trimmed };
+      const plannedMessages = [...messages, userMessage];
+
+      // ✅ 1) 먼저 /api/chat 호출해서 (사용량 초과 포함) 결과를 확정
+      const chatRes = await fetch("/api/chat", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+        },
+        body: JSON.stringify({
+          messages: plannedMessages,
+          isFirst: false,
+          sessionId: sessionId,
+          language: selectedLanguage,
+          level: selectedLevel,
+          personaType: selectedPersona,
+        }),
+      });
+
+      const chatData = await chatRes.json().catch(() => null);
+
+      if (!chatRes.ok) {
+        if (chatRes.status === 403 && chatData?.code === "CHAT_LIMIT_EXCEEDED") {
+          setUsageLimitType("chat");
           return;
         }
+        console.error("/api/chat error:", chatData);
+        alert("응답을 가져오지 못했어요.");
+        return;
+      }
 
+      const fullAssistantText = chatData?.reply ?? "응답을 가져오지 못했어요.";
+
+      // ✅ 2) 여기부터는 실제로 UI에 반영 + 저장
+      shouldAutoScrollRef.current = true;
+      setInput("");
+
+      setMessages((prev) => [...prev, userMessage]);
+
+      // ✅ 2-1) (로그인) user 메시지 저장
+      if (!isGuest && sessionId) {
         try {
           const saveUserRes = await fetch("/api/message/add", {
             method: "POST",
@@ -1050,7 +970,7 @@ const ok = isConsentAccepted(consent);
               ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
             },
             body: JSON.stringify({
-              sessionId: currentSessionId,
+              sessionId: sessionId,
               role: "user",
               content: trimmed,
             }),
@@ -1076,44 +996,14 @@ const ok = isConsentAccepted(consent);
         }
       }
 
-      const chatRes = await fetch("/api/chat", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
-        },
-        body: JSON.stringify({
-          messages: newMessages,
-          isFirst: false,
-          sessionId: currentSessionId,
-          language: selectedLanguage,
-          level: selectedLevel,
-          personaType: selectedPersona,
-        }),
-      });
-
-      const chatData = await chatRes.json().catch(() => null);
-
-      if (!chatRes.ok) {
-        if (chatRes.status === 403 && chatData?.code === "CHAT_LIMIT_EXCEEDED") {
-          setUsageLimitType("chat");
-          return;
-        }
-        console.error("/api/chat error:", chatData);
-        alert("응답을 가져오지 못했어요.");
-        return;
-      }
-
-      const fullAssistantText = chatData?.reply ?? "응답을 가져오지 못했어요.";
-
       const tempAssistantId = makeId();
-
       setMessages((prev) => [...prev, { id: tempAssistantId, role: "assistant", content: "" }]);
 
       const formatted = formatAssistantText(fullAssistantText);
       startTypewriter(formatted);
 
-      if (!isGuest && currentSessionId) {
+      // ✅ 2-2) (로그인) assistant 메시지 저장
+      if (!isGuest && sessionId) {
         try {
           const saveAssistantRes = await fetch("/api/message/add", {
             method: "POST",
@@ -1122,7 +1012,7 @@ const ok = isConsentAccepted(consent);
               ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
             },
             body: JSON.stringify({
-              sessionId: currentSessionId,
+              sessionId: sessionId,
               role: "assistant",
               content: formatted,
             }),
@@ -1140,9 +1030,7 @@ const ok = isConsentAccepted(consent);
               null;
 
             if (dbId) {
-              setMessages((prev) =>
-                prev.map((m) => (m.id === tempAssistantId ? { ...m, dbId } : m))
-              );
+              setMessages((prev) => prev.map((m) => (m.id === tempAssistantId ? { ...m, dbId } : m)));
             }
           }
         } catch (saveErr) {
@@ -1150,7 +1038,7 @@ const ok = isConsentAccepted(consent);
         }
       }
 
-      if (isGuest && chatRes.ok) {
+      if (isGuest) {
         setGuestTrialCount((prev) => prev + 1);
       }
     } catch (e) {
@@ -1159,8 +1047,10 @@ const ok = isConsentAccepted(consent);
       shouldAutoScrollRef.current = true;
     } finally {
       setIsSending(false);
+      sendingRef.current = false;
     }
   };
+
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -1567,58 +1457,6 @@ const ok = isConsentAccepted(consent);
           </button>
         </div>
 
-        {/* ✅ 사용량 제한 안내 */}
-        {usageLimitType && (
-          <div
-            style={{
-              marginBottom: "10px",
-              padding: "12px 12px",
-              borderRadius: "12px",
-              border: "1px solid rgba(255,255,255,0.12)",
-              background: "rgba(0,0,0,0.25)",
-            }}
-          >
-            <div style={{ fontSize: "13px", color: "#f9fafb", marginBottom: "10px" }}>
-              {usageLimitType === "chat" && "오늘 채팅 사용량을 모두 사용했어요."}
-              {usageLimitType === "tts" && "오늘 음성 사용량을 모두 사용했어요."}
-              {usageLimitType === "learning" && "오늘 학습 사용량을 모두 사용했어요."}
-            </div>
-
-            <div style={{ display: "flex", gap: "8px" }}>
-              <button
-                onClick={() => setShowPlanModal(true)}
-                style={{
-                  padding: "8px 12px",
-                  borderRadius: "999px",
-                  border: "1px solid rgba(255,255,255,0.18)",
-                  background: "#111",
-                  color: "white",
-                  cursor: "pointer",
-                  fontSize: "13px",
-                  fontWeight: 600,
-                }}
-              >
-                플랜 업그레이드
-              </button>
-
-              <button
-                onClick={() => setUsageLimitType(null)}
-                style={{
-                  padding: "8px 12px",
-                  borderRadius: "999px",
-                  border: "1px solid rgba(255,255,255,0.12)",
-                  background: "transparent",
-                  color: "#cbd5e1",
-                  cursor: "pointer",
-                  fontSize: "13px",
-                }}
-              >
-                닫기
-              </button>
-            </div>
-          </div>
-        )}
-
         {/* 메인 영역 */}
         <div
           ref={scrollContainerRef}
@@ -1854,68 +1692,17 @@ const ok = isConsentAccepted(consent);
           <div style={{ borderTop: "1px solid #333", paddingTop: "8px" }}>
             {hasStarted ? (
               <>
-                {/* ✅ 수정모드 배지 */}
-                {isEditing && (
-                  <div
-                    style={{
-                      marginBottom: "8px",
-                      border: "1px solid #374151",
-                      backgroundColor: "#0b1220",
-                      borderRadius: "10px",
-                      padding: "8px 10px",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "space-between",
-                      gap: "10px",
-                    }}
-                  >
-                    <div style={{ fontSize: "12px", color: "#e5e7eb" }}>메시지 수정 중</div>
-                    <button
-                      type="button"
-                      onClick={cancelEdit}
-                      style={{
-                        fontSize: "12px",
-                        padding: "6px 10px",
-                        borderRadius: "999px",
-                        border: "1px solid #4b5563",
-                        backgroundColor: "transparent",
-                        color: "#e5e7eb",
-                        cursor: "pointer",
-                        whiteSpace: "nowrap",
-                      }}
-                    >
-                      취소
-                    </button>
-                  </div>
-                )}
-
-                {/* ✅ ✏️ + 입력창 */}
                 <div style={{ display: "flex", gap: "8px", alignItems: "stretch", marginBottom: "8px" }}>
-                  {canEditLastUser && !isEditing && (
-                    <button
-                      type="button"
-                      onClick={startEditLastUser}
-                      style={{
-                        width: "42px",
-                        borderRadius: "8px",
-                        border: "1px solid #333",
-                        backgroundColor: "#111",
-                        color: "white",
-                        cursor: "pointer",
-                        fontSize: "16px",
-                      }}
-                      aria-label="마지막 내 메시지 수정"
-                      title="마지막 내 메시지 수정"
-                    >
-                      ✏️
-                    </button>
-                  )}
-
                   <textarea
                     value={input}
                     onChange={(e) => setInput(e.target.value)}
                     onKeyDown={handleKeyDown}
-                    placeholder={isEditing ? "수정할 내용을 입력하세요. (Enter: 전송)" : "(Enter: 전송, Shift+Enter: 줄바꿈)"}
+                    disabled={isSending || usageLimitType === "chat"}
+                    placeholder={
+                      usageLimitType === "chat"
+                        ? "오늘 채팅 사용량을 모두 사용했어요."
+                        : "(Enter: 전송, Shift+Enter: 줄바꿈)"
+                    }
                     style={{
                       width: "100%",
                       height: "70px",
@@ -1926,6 +1713,8 @@ const ok = isConsentAccepted(consent);
                       border: "1px solid #333",
                       padding: "8px",
                       fontSize: "13px",
+                      opacity: isSending || usageLimitType === "chat" ? 0.6 : 1,
+                      cursor: isSending || usageLimitType === "chat" ? "not-allowed" : "text",
                     }}
                   />
                 </div>
@@ -1939,13 +1728,13 @@ const ok = isConsentAccepted(consent);
                     borderRadius: "8px",
                     border: "none",
                     cursor: isSending ? "not-allowed" : "pointer",
-                    backgroundColor: isSending ? "#555" : isEditing ? "#22c55e" : "#2563eb",
+                    backgroundColor: isSending ? "#555" : "#2563eb",
                     color: "white",
                     fontSize: "14px",
                     fontWeight: 500,
                   }}
                 >
-                  {isSending ? "처리 중..." : isEditing ? "수정해서 다시 보내기" : "보내기"}
+                  {isSending ? "처리 중..." : "보내기"}
                 </button>
               </>
             ) : (
@@ -2037,6 +1826,16 @@ const ok = isConsentAccepted(consent);
           </div>
         </div>
       )}
+
+      <UsageLimitModal
+        open={!!usageLimitType}
+        type={usageLimitType}
+        onClose={() => setUsageLimitType(null)}
+        onUpgrade={() => {
+          setUsageLimitType(null);
+          setShowPlanModal(true);
+        }}
+      />
 
       <PlanModal open={showPlanModal} onClose={() => setShowPlanModal(false)} currentPlan={currentPlan} />
 
