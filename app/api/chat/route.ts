@@ -550,10 +550,6 @@ ${levelGuide(level)}
         const role = m.role as "user" | "assistant";
         const content = String(m.content ?? "");
 
-        if (role === "user" && looksLikePromptInjection(content)) {
-          return { role, content: wrapUserMessageForSafety(content) };
-        }
-
         return { role, content };
       });
 
