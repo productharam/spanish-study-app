@@ -19,12 +19,12 @@ export type ElevenLabsTTSConfig = {
 // - modelId/outputFormat은 공통으로 두고 필요하면 언어별로 다르게
 export const ELEVEN_CONFIG_BY_LANG: Record<string, ElevenLabsTTSConfig> = {
   en: {
-    voiceId: "UgBBYS2sOqTuMpoF3BR0",
+    voiceId: "GoGUcAZovo4MFeLxJdZd",
     modelId: "eleven_turbo_v2_5",
     outputFormat: "mp3_22050",
     voiceSettings: {
       stability: 0.5,
-      similarity_boost: 0.75,
+      similarity_boost: 0.8,
       style: 0,
       use_speaker_boost: true,
     },
@@ -35,35 +35,45 @@ export const ELEVEN_CONFIG_BY_LANG: Record<string, ElevenLabsTTSConfig> = {
     outputFormat: "mp3_22050",
     voiceSettings: {
       stability: 0.5,
-      similarity_boost: 0.75,
+      similarity_boost: 0.8,
       style: 0,
       use_speaker_boost: true,
     },
   },
-
-  // 필요할 때 추가
   ja: {
-    voiceId: "Mv8AjrYZCBkdsmDHNwcBD",
+    voiceId: "aTTiK3YzK3dXETpuDE2h",
     modelId: "eleven_turbo_v2_5",
     outputFormat: "mp3_22050",
+        voiceSettings: {
+      stability: 0.5,
+      similarity_boost: 0.5,
+      style: 0,
+      use_speaker_boost: true,
+    },
   },
   zh: {
-    voiceId: "MI36FIkp9wRP7cpWKPTl",
+    voiceId: "GoGUcAZovo4MFeLxJdZd",
     modelId: "eleven_turbo_v2_5",
     outputFormat: "mp3_22050",
+        voiceSettings: {
+      stability: 0.4,
+      similarity_boost: 0.5,
+      style: 0,
+      use_speaker_boost: true,
+    },
   },
   fr: {
-    voiceId: "FvmvwvObRqIHojkEGh5ND",
+    voiceId: "aTTiK3YzK3dXETpuDE2h",
     modelId: "eleven_turbo_v2_5",
     outputFormat: "mp3_22050",
   },
   ru: {
-    voiceId: "Nh2zY9kknu6z4pZy6FhD",
+    voiceId: "aTTiK3YzK3dXETpuDE2h",
     modelId: "eleven_turbo_v2_5",
     outputFormat: "mp3_22050",
   },
   ar: {
-    voiceId: "4wf10lgibMnboGJGCLrP",
+    voiceId: "UgBBYS2sOqTuMpoF3BR0",
     modelId: "eleven_turbo_v2_5",
     outputFormat: "mp3_22050",
   },
