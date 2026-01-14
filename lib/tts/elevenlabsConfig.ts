@@ -19,7 +19,7 @@ export type ElevenLabsTTSConfig = {
 // - modelId/outputFormat은 공통으로 두고 필요하면 언어별로 다르게
 export const ELEVEN_CONFIG_BY_LANG: Record<string, ElevenLabsTTSConfig> = {
   en: {
-    voiceId: "REPLACE_WITH_EN_VOICE_ID",
+    voiceId: "UgBBYS2sOqTuMpoF3BR0",
     modelId: "eleven_turbo_v2_5",
     outputFormat: "mp3_22050",
     voiceSettings: {
@@ -43,27 +43,27 @@ export const ELEVEN_CONFIG_BY_LANG: Record<string, ElevenLabsTTSConfig> = {
 
   // 필요할 때 추가
   ja: {
-    voiceId: "REPLACE_WITH_JA_VOICE_ID",
+    voiceId: "Mv8AjrYZCBkdsmDHNwcBD",
     modelId: "eleven_turbo_v2_5",
     outputFormat: "mp3_22050",
   },
   zh: {
-    voiceId: "REPLACE_WITH_ZH_VOICE_ID",
+    voiceId: "MI36FIkp9wRP7cpWKPTl",
     modelId: "eleven_turbo_v2_5",
     outputFormat: "mp3_22050",
   },
   fr: {
-    voiceId: "REPLACE_WITH_FR_VOICE_ID",
+    voiceId: "FvmvwvObRqIHojkEGh5ND",
     modelId: "eleven_turbo_v2_5",
     outputFormat: "mp3_22050",
   },
   ru: {
-    voiceId: "REPLACE_WITH_RU_VOICE_ID",
+    voiceId: "Nh2zY9kknu6z4pZy6FhD",
     modelId: "eleven_turbo_v2_5",
     outputFormat: "mp3_22050",
   },
   ar: {
-    voiceId: "REPLACE_WITH_AR_VOICE_ID",
+    voiceId: "4wf10lgibMnboGJGCLrP",
     modelId: "eleven_turbo_v2_5",
     outputFormat: "mp3_22050",
   },
