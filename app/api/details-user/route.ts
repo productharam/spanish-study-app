@@ -145,10 +145,11 @@ async function getSessionConfig(sessionId?: string | null) {
 
 export async function POST(req: NextRequest) {
   try {
-    const { text, sessionId, uiLang } = (await req.json().catch(() => ({}))) as {
+    const { text, sessionId, uiLang, messageId } = (await req.json().catch(() => ({}))) as {
       text?: string;
       sessionId?: string | null;
       uiLang?: UiLang; // optional: "ko" | "en" (default "ko")
+      messageId?: string | null; // optional: chat_messages.id (저장용)
     };
 
     if (!text || typeof text !== "string") {
@@ -239,6 +240,40 @@ Learner input:
       grammar: String(json.grammar ?? "").trim(),
       tip: String(json.tip ?? "").trim(),
     };
+
+    // ✅ (옵션) DB 저장: messageId + Authorization가 있으면 chat_messages.details에 upsert
+    if (messageId && sessionId) {
+      const authHeader = req.headers.get("authorization") ?? "";
+      const token = authHeader.startsWith("Bearer ") ? authHeader.slice("Bearer ".length) : null;
+
+      if (token) {
+        const { data: userData, error: userErr } = await supabaseServer.auth.getUser(token);
+        const user = userData?.user;
+
+        if (!userErr && user) {
+          // 내 메시지인지 확인 + 기존 details와 병합
+          const { data: msgRow, error: msgErr } = await supabaseServer
+            .from("chat_messages")
+            .select("details")
+            .eq("id", messageId)
+            .eq("session_id", sessionId)
+            .eq("user_id", user.id)
+            .maybeSingle();
+
+          if (!msgErr && msgRow) {
+            const prevDetails = (msgRow as any)?.details ?? {};
+            const merged = { ...(prevDetails ?? {}), ...result };
+
+            await supabaseServer
+              .from("chat_messages")
+              .update({ details: merged })
+              .eq("id", messageId)
+              .eq("session_id", sessionId)
+              .eq("user_id", user.id);
+          }
+        }
+      }
+    }
 
     return NextResponse.json(result);
   } catch (err) {

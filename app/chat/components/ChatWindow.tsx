@@ -125,6 +125,76 @@ export default function ChatWindow() {
   onUsageLimit: (t) => setUsageLimitType(t),
 });
 
+  // ✅ 유저 말풍선 TTS는 "원문"이 아니라 details.correction(0. 문장교정)을 읽는다.
+  // (없으면 details-user를 호출해 생성 + DB(details jsonb)에 저장)
+  const getUserTtsText = async (msg: ChatMessage): Promise<string> => {
+    const existing = msg.details?.correction?.trim();
+    if (existing) return existing;
+
+    if (!sessionId) return msg.content;
+
+    try {
+      const accessToken = !isGuest ? await getAccessToken() : null;
+
+      const res = await fetch("/api/details-user", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+        },
+        body: JSON.stringify({
+          text: msg.content,
+          sessionId,
+          messageId: msg.dbId ?? null,
+        }),
+      });
+
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data) return msg.content;
+
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === msg.id
+            ? {
+                ...m,
+                details: {
+                  correction: data.correction ?? "",
+                  ko: data.ko ?? "",
+                  en: data.en ?? "",
+                  grammar: data.grammar ?? "",
+                  tip: data.tip ?? "",
+                },
+              }
+            : m
+        )
+      );
+
+      const correction = String(data?.correction ?? "").trim();
+      return correction || msg.content;
+    } catch {
+      return msg.content;
+    }
+  };
+
+  const handlePlayBubbleTTS = async (msg: ChatMessage) => {
+    const messageKey = getMessageKey(msg);
+
+    // ✅ 재생 중이면 즉시 STOP (교정 생성 호출 없이)
+    if (playingMessageKey === messageKey) {
+      await handlePlayTTS({ id: msg.id, dbId: msg.dbId, role: msg.role, content: msg.content });
+      return;
+    }
+
+    const ttsText = msg.role === "user" ? await getUserTtsText(msg) : msg.content;
+
+    await handlePlayTTS({
+      id: msg.id,
+      dbId: msg.dbId,
+      role: msg.role,
+      content: ttsText,
+    });
+  };
+
   // ✅ (선택) 사용자가 위로 스크롤하면 자동 스크롤 OFF / 바닥 근처면 ON
   useEffect(() => {
     const el = scrollContainerRef.current;
@@ -485,16 +555,21 @@ const ok = isConsentAccepted(consent);
   /**
    * 🔍 내(user) 말풍선 상세 내용 로드 - /api/details-user
    */
-  const loadUserDetails = async (id: string, text: string) => {
+  const loadUserDetails = async (id: string, text: string, dbId?: string) => {
     setMessages((prev) =>
       prev.map((m) => (m.id === id ? { ...m, isDetailsLoading: true, detailsError: false } : m))
     );
 
     try {
+      const accessToken = !isGuest ? await getAccessToken() : null;
+
       const res = await fetch("/api/details-user", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text, sessionId }),
+        headers: {
+          "Content-Type": "application/json",
+          ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+        },
+        body: JSON.stringify({ text, sessionId, messageId: dbId ?? null }),
       });
 
       const data = await res.json();
@@ -540,13 +615,13 @@ const ok = isConsentAccepted(consent);
   };
 
   // 내 말풍선 더보기
-  const toggleUserDetails = (id: string, text: string, alreadyHasDetails: boolean) => {
+  const toggleUserDetails = (id: string, text: string, alreadyHasDetails: boolean, dbId?: string) => {
     setExpandedMessageIds((prev) => {
       const isExpanded = prev.includes(id);
       if (isExpanded) return prev.filter((x) => x !== id);
 
       const next = [...prev, id];
-      if (!alreadyHasDetails) loadUserDetails(id, text);
+      if (!alreadyHasDetails) loadUserDetails(id, text, dbId);
       return next;
     });
   };
@@ -697,14 +772,19 @@ const ok = isConsentAccepted(consent);
     try {
       setIsStudyLoading(true);
 
+      const accessToken = await getAccessToken();
+
       let baseSpanish = "";
 
       if (message.role === "user") {
         if (!message.details?.correction) {
           const res = await fetch("/api/details-user", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ text: message.content, sessionId }),
+            headers: {
+              "Content-Type": "application/json",
+              ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+            },
+            body: JSON.stringify({ text: message.content, sessionId, messageId: message.dbId }),
           });
           const data = await res.json().catch(() => null);
           if (!res.ok || !data) {
@@ -718,8 +798,11 @@ const ok = isConsentAccepted(consent);
                 ? {
                     ...m,
                     details: {
-                      ...(m.details ?? { ko: "", en: "", grammar: "", tip: "" }),
                       correction: data.correction ?? "",
+                      ko: data.ko ?? "",
+                      en: data.en ?? "",
+                      grammar: data.grammar ?? "",
+                      tip: data.tip ?? "",
                     },
                   }
                 : m
@@ -738,8 +821,6 @@ const ok = isConsentAccepted(consent);
         alert("학습에 사용할 문장이 없어요.");
         return;
       }
-
-            const accessToken = await getAccessToken();
 
       // ✅ 학습 카드 준비 API 호출
       const prepRes = await fetch("/api/learning/prepare", {
@@ -1525,7 +1606,7 @@ await new Promise((r) => setTimeout(r, 0));
                         {isUserMsg && (
                           <>
                             <button
-                              onClick={() => toggleUserDetails(msg.id, msg.content, hasDetails)}
+                              onClick={() => toggleUserDetails(msg.id, msg.content, hasDetails, msg.dbId)}
                               style={{
                                 fontSize: "14px",
                                 padding: "4px 8px",
@@ -1559,14 +1640,7 @@ await new Promise((r) => setTimeout(r, 0));
 
                             {/* ✅ 유저 말풍선에도 TTS */}
                             <button
-  onClick={() =>
-    handlePlayTTS({
-      id: msg.id,
-      dbId: msg.dbId,
-      role: msg.role,
-      content: msg.content,
-    })
-  }
+  onClick={() => void handlePlayBubbleTTS(msg)}
   style={{
     fontSize: "14px",
     padding: "4px 8px",
@@ -1633,14 +1707,7 @@ await new Promise((r) => setTimeout(r, 0));
                               📘
                             </button>
                             <button
-  onClick={() =>
-    handlePlayTTS({
-      id: msg.id,
-      dbId: msg.dbId,
-      role: msg.role,
-      content: msg.content,
-    })
-  }
+  onClick={() => void handlePlayBubbleTTS(msg)}
   style={{
     fontSize: "14px",
     padding: "4px 8px",
@@ -1673,7 +1740,7 @@ await new Promise((r) => setTimeout(r, 0));
                           }}
                           isUserMsg={isUserMsg}
                           onRetry={() => {
-                            if (isUserMsg) loadUserDetails(msg.id, msg.content);
+                            if (isUserMsg) loadUserDetails(msg.id, msg.content, msg.dbId);
                             else loadDetails(msg.id, msg.content);
                           }}
                         />

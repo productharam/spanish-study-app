@@ -45,6 +45,11 @@ export function useSoundTTS({
     if (!sessionId) return null;
     const key = getMessageKey(m);
     const lang = (languageCode ?? "en").trim();
+    // ✅ 유저 말풍선은 "교정 문장"을 읽도록 바뀌었기 때문에,
+    // 기존(원문) TTS 캐시/스토리지와 충돌하지 않도록 경로를 분리한다.
+    if (m.role === "user") return `${sessionId}/${lang}/u/${key}`;
+
+    // ✅ 어시스턴트 말풍선은 기존 경로 유지
     return `${sessionId}/${lang}/${key}`; // ✅ 언어 포함 (캐시 충돌 방지)
   };
 

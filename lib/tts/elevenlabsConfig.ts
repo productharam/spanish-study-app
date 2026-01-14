@@ -33,12 +33,6 @@ export const ELEVEN_CONFIG_BY_LANG: Record<string, ElevenLabsTTSConfig> = {
     voiceId: "Nh2zY9kknu6z4pZy6FhD",
     modelId: "eleven_turbo_v2_5",
     outputFormat: "mp3_22050",
-    voiceSettings: {
-      stability: 0.5,
-      similarity_boost: 0.8,
-      style: 0,
-      use_speaker_boost: true,
-    },
   },
   ja: {
     voiceId: "aTTiK3YzK3dXETpuDE2h",
