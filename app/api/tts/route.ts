@@ -1,6 +1,7 @@
 // app/api/tts/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseServer } from "@/lib/supabaseServerClient";
+import { getElevenConfig } from "@/lib/tts/elevenlabsConfig";
 
 const ELEVEN_API_KEY = process.env.ELEVENLABS_API_KEY!;
 const ELEVEN_VOICE_ID = process.env.ELEVENLABS_VOICE_ID ?? "EXAVITQu4vr4xnSDxMaL";
@@ -53,10 +54,12 @@ export async function POST(req: NextRequest) {
       console.warn("[/api/tts] profile plan load exception -> fallback standard", e);
     }
 
-    // ✅ 1) 입력 검증
+    // ✅ 1) 요청 파싱
     const body = await req.json().catch(() => null);
+
     const text = body?.text;
     const audioId = body?.audioId;
+    const language = body?.language; // ✅ 추가: 언어 코드 (예: "en", "es", "en-US")
 
     if (!text || typeof text !== "string") {
       return NextResponse.json({ ok: false, code: "BAD_REQUEST", error: "text is required" }, { status: 400 });
@@ -92,7 +95,7 @@ export async function POST(req: NextRequest) {
     try {
       const { data: items, error: listErr } = await supabaseServer.storage
         .from(bucket)
-        .list(dir, { limit: 1, search: filename });
+        .list(dir, { limit: 1000 });
 
       if (!listErr && items && items.some((it) => it.name === filename)) {
         const publicUrl = getPublicUrl();
@@ -100,14 +103,11 @@ export async function POST(req: NextRequest) {
           return NextResponse.json({ ok: true, url: publicUrl, fromCache: true, plan });
         }
       }
-    } catch (checkErr) {
-      // 캐시 체크 에러는 그냥 무시하고 생성 진행
-      console.warn("[/api/tts] cache list check error:", checkErr);
+    } catch (e) {
+      console.warn("[/api/tts] storage list check failed; continue to generate", e);
     }
 
-    // ✅ 3) 사용량 차감 (캐시 미스 후)
-    // - 여기서 plan별 제한을 DB에서 처리하는 구조(현재 구현 유지)
-    // - plan을 DB에서 쓰고 싶으면, rpc에 plan을 파라미터로 넘기도록 함수 확장 가능
+    // ✅ 3) 사용량 차감 (플랜 로직은 DB 함수에서 처리)
     const { data: canUseTTS, error: usageErr } = await supabaseServer.rpc("consume_usage_quota", {
       p_user_id: user.id,
       p_usage_type: "tts",
@@ -123,8 +123,14 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: false, code: "TTS_LIMIT_EXCEEDED", plan }, { status: 403 });
     }
 
-    // ✅ 4) ElevenLabs TTS 생성
-    const elevenRes = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${ELEVEN_VOICE_ID}`, {
+    // ✅ 4) ElevenLabs 설정(언어별) 선택
+    const cfg = getElevenConfig(language);
+    const voiceId = cfg.voiceId || ELEVEN_VOICE_ID;
+    const modelId = cfg.modelId || "eleven_turbo_v2_5";
+    const outputFormat = cfg.outputFormat || "mp3_22050";
+
+    // ✅ 5) ElevenLabs TTS 생성
+    const elevenRes = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
       method: "POST",
       headers: {
         "xi-api-key": ELEVEN_API_KEY,
@@ -132,26 +138,31 @@ export async function POST(req: NextRequest) {
       },
       body: JSON.stringify({
         text,
-        model_id: "eleven_turbo_v2_5",
-        output_format: "mp3_22050",
+        model_id: modelId,
+        output_format: outputFormat,
+        ...(cfg.voiceSettings ? { voice_settings: cfg.voiceSettings } : {}),
       }),
     });
 
     if (!elevenRes.ok) {
       const errText = await elevenRes.text().catch(() => "");
       console.error("ElevenLabs error:", elevenRes.status, errText);
-      return NextResponse.json({ ok: false, code: "ELEVENLABS_FAILED", error: "Failed to generate TTS" }, { status: 500 });
+      return NextResponse.json(
+        { ok: false, code: "ELEVENLABS_FAILED", error: "Failed to generate TTS" },
+        { status: 500 }
+      );
     }
 
-    const audioBuffer = Buffer.from(await elevenRes.arrayBuffer());
+    const audioBuf = Buffer.from(await elevenRes.arrayBuffer());
 
-    // ✅ 5) Storage 업로드
-    const { error: uploadError } = await supabaseServer.storage.from(bucket).upload(filePath, audioBuffer, {
-      contentType: "audio/mpeg",
-      upsert: false,
-    });
+    // ✅ 6) 업로드 (409/이미 존재하면 캐시로 처리)
+    const { error: uploadError } = await supabaseServer.storage
+      .from(bucket)
+      .upload(filePath, audioBuf, {
+        contentType: "audio/mpeg",
+        upsert: false,
+      });
 
-    // ✅ 업로드 충돌 처리
     if (uploadError) {
       const msg = (uploadError as any)?.message?.toString?.() ?? String(uploadError);
       const looksLikeConflict =
@@ -167,10 +178,13 @@ export async function POST(req: NextRequest) {
       }
 
       console.error("Supabase upload error:", uploadError);
-      return NextResponse.json({ ok: false, code: "UPLOAD_FAILED", error: "Failed to upload TTS to storage" }, { status: 500 });
+      return NextResponse.json(
+        { ok: false, code: "UPLOAD_FAILED", error: "Failed to upload TTS to storage" },
+        { status: 500 }
+      );
     }
 
-    // ✅ 6) public URL 생성
+    // ✅ 7) public URL 생성
     const publicUrl = getPublicUrl();
     if (!publicUrl) {
       return NextResponse.json({ ok: false, code: "PUBLIC_URL_FAILED", error: "Failed to get public URL" }, { status: 500 });
@@ -179,6 +193,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, url: publicUrl, fromCache: false, plan });
   } catch (e: any) {
     console.error("TTS route error:", e);
-    return NextResponse.json({ ok: false, code: "TTS_ROUTE_ERROR", error: e?.message ?? "Unknown error" }, { status: 500 });
+    return NextResponse.json(
+      { ok: false, code: "TTS_ROUTE_ERROR", error: e?.message ?? "Unknown error" },
+      { status: 500 }
+    );
   }
 }

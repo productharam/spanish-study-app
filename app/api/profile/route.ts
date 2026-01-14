@@ -11,6 +11,18 @@ function parseBearer(req: NextRequest) {
     : null;
 }
 
+// ✅ last_active_at 갱신(실패해도 프로필 응답은 정상 반환)
+async function touchLastActive(userId: string) {
+  try {
+    await supabaseServer
+      .from("profiles")
+      .update({ last_active_at: new Date().toISOString() })
+      .eq("user_id", userId);
+  } catch {
+    // no-op
+  }
+}
+
 export async function GET(req: NextRequest) {
   const supabase = supabaseServer;
 
@@ -68,9 +80,7 @@ export async function GET(req: NextRequest) {
     // ✅ 3) row가 없으면 (트리거 누락/이전 데이터 등) 최소값으로 생성
     if (!profile) {
       const nickname =
-        (user.user_metadata?.name as string | undefined) ??
-        user.email ??
-        "";
+        (user.user_metadata?.name as string | undefined) ?? user.email ?? "";
 
       const { data: created, error: insErr } = await supabase
         .from("profiles")
@@ -79,6 +89,8 @@ export async function GET(req: NextRequest) {
           email: user.email,
           plan: "standard",
           nickname,
+          // ✅ 생성 시점에도 last_active_at 찍기 (컬럼 없으면 supabase가 에러낼 수 있으니 아래 touch로도 보강)
+          last_active_at: new Date().toISOString(),
         })
         .select("user_id, email, plan, nickname")
         .single();
@@ -95,6 +107,9 @@ export async function GET(req: NextRequest) {
         );
       }
 
+      // ✅ 혹시 insert에서 last_active_at 컬럼이 누락/권한 문제면 여기서 한 번 더 찍음
+      await touchLastActive(userId);
+
       return NextResponse.json({
         ok: true,
         isGuest: false,
@@ -107,7 +122,9 @@ export async function GET(req: NextRequest) {
       });
     }
 
-    // ✅ 4) 정상 응답
+    // ✅ 4) 정상 응답 직전에 last_active_at 갱신
+    await touchLastActive(userId);
+
     return NextResponse.json({
       ok: true,
       isGuest: false,

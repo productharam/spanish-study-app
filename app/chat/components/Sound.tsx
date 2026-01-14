@@ -14,16 +14,18 @@ type UsageLimitType = "chat" | "tts" | "learning";
 
 type UseSoundParams = {
   sessionId: string | null;
+  languageCode?: string | null; // ✅ 추가
   isGuest: boolean;
   ttsEnabled: boolean;
   isProfileLoading: boolean;
 
   getAccessToken: () => Promise<string | null>;
-  onUsageLimit?: (type: UsageLimitType) => void; // ✅ 상위(ChatWindow)에서 "오늘 사용량..." UI 띄우기
+  onUsageLimit?: (type: UsageLimitType) => void;
 };
 
 export function useSoundTTS({
   sessionId,
+  languageCode, // ✅ 추가
   isGuest,
   ttsEnabled,
   isProfileLoading,
@@ -42,7 +44,8 @@ export function useSoundTTS({
   const getAudioId = (m: SoundChatMessage) => {
     if (!sessionId) return null;
     const key = getMessageKey(m);
-    return `${sessionId}/${key}`;
+    const lang = (languageCode ?? "en").trim();
+    return `${sessionId}/${lang}/${key}`; // ✅ 언어 포함 (캐시 충돌 방지)
   };
 
   const stopAllAudio = () => {
@@ -55,63 +58,57 @@ export function useSoundTTS({
   };
 
   const clearAudioCache = () => {
-    // public URL을 쓰는 구조라 revokeObjectURL은 불필요
     audioCacheRef.current.clear();
   };
 
   const handlePlayTTS = async (message: SoundChatMessage) => {
     try {
+      if (!ttsEnabled) {
+        alert("음성 기능을 사용할 수 없어요 🙂");
+        return;
+      }
+
       if (isProfileLoading) return;
 
       if (isGuest) {
-        alert("음성 기능은 로그인 후 사용할 수 있어요.");
+        alert("로그인이 필요해요 🙂");
         return;
       }
 
-      // ✅ 회원이지만 플랜/설정상 비활성인 경우: 출시모달 삭제 → 알럿만
-      if (!ttsEnabled) {
-        alert("음성 기능은 현재 사용할 수 없어요.");
-        return;
-      }
-
-      if (!sessionId) {
-        alert("세션 정보가 없어서 음성을 재생할 수 없어요 🥲");
-        return;
-      }
+      const audioId = getAudioId(message);
+      if (!audioId) return;
 
       const messageKey = getMessageKey(message);
 
-      // ✅ 같은 메시지 재생 중이면 정지
-      if (playingMessageKey === messageKey && currentAudioRef.current) {
+      // ✅ 이미 재생중이면 STOP
+      if (playingMessageKey === messageKey) {
         stopAllAudio();
         return;
       }
 
-      // ✅ 다른 메시지 재생 중이면 끊고 시작
-      if (currentAudioRef.current) stopAllAudio();
-
-      const audioId = getAudioId(message);
-      if (!audioId) {
-        alert("세션 정보가 없어서 음성을 재생할 수 없어요 🥲");
-        return;
-      }
-
-      // ✅ 프론트 캐시 히트면 즉시 재생
-      if (audioCacheRef.current.has(audioId)) {
-        const url = audioCacheRef.current.get(audioId)!;
-        const audio = new Audio(url);
-        currentAudioRef.current = audio;
+      // ✅ 캐시에 있으면 바로 재생
+      const cachedUrl = audioCacheRef.current.get(audioId);
+      if (cachedUrl) {
+        stopAllAudio();
         setPlayingMessageKey(messageKey);
 
-        audio.play();
+        const audio = new Audio(cachedUrl);
+        currentAudioRef.current = audio;
+
         audio.onended = () => {
           currentAudioRef.current = null;
           setPlayingMessageKey(null);
         };
+
         audio.onerror = () => {
           currentAudioRef.current = null;
           setPlayingMessageKey(null);
         };
+
+        await audio.play().catch(() => {
+          currentAudioRef.current = null;
+          setPlayingMessageKey(null);
+        });
         return;
       }
 
@@ -132,63 +129,67 @@ export function useSoundTTS({
         body: JSON.stringify({
           text: message.content,
           audioId,
+          language: languageCode ?? "en", // ✅ 추가
         }),
       });
 
-      // ✅ 제한/차단 처리 (출시모달 삭제)
+      // ✅ 제한/차단 처리
       if (!res.ok) {
         const data = await res.json().catch(() => null);
 
         if (res.status === 403) {
           if (data?.code === "TTS_LIMIT_EXCEEDED") {
             onUsageLimit?.("tts");
-            setPlayingMessageKey(null);
-            return;
-          }
-          if (data?.code === "TTS_NOT_ENABLED") {
-            alert("음성 기능은 현재 사용할 수 없어요.");
-            setPlayingMessageKey(null);
+            stopAllAudio();
             return;
           }
         }
 
-        if (res.status === 401) {
-          alert("로그인이 필요해요 🙂");
-          setPlayingMessageKey(null);
-          return;
-        }
-
-        console.error("TTS 요청 실패:", data);
-        throw new Error("TTS 요청 실패");
+        stopAllAudio();
+        alert("음성 생성에 실패했어요 😢");
+        return;
       }
 
       const data = await res.json().catch(() => null);
       const url = data?.url as string | undefined;
-      if (!url) throw new Error("TTS URL이 응답에 없어요");
 
+      if (!url) {
+        stopAllAudio();
+        alert("음성 URL을 가져오지 못했어요 😢");
+        return;
+      }
+
+      // ✅ 캐시 저장
       audioCacheRef.current.set(audioId, url);
+
+      // ✅ 재생
+      stopAllAudio();
+      setPlayingMessageKey(messageKey);
 
       const audio = new Audio(url);
       currentAudioRef.current = audio;
 
-      audio.play();
       audio.onended = () => {
         currentAudioRef.current = null;
         setPlayingMessageKey(null);
       };
+
       audio.onerror = () => {
         currentAudioRef.current = null;
         setPlayingMessageKey(null);
       };
-    } catch (err) {
-      console.error(err);
-      alert("음성 재생 중 오류가 발생했어");
-      setPlayingMessageKey(null);
-      currentAudioRef.current = null;
+
+      await audio.play().catch(() => {
+        currentAudioRef.current = null;
+        setPlayingMessageKey(null);
+      });
+    } catch {
+      stopAllAudio();
+      alert("음성 재생 중 오류가 발생했어요 😢");
     }
   };
 
-  // ✅ 언마운트 시 오디오 정리
+  // ✅ 언마운트 시 정리
   useEffect(() => {
     return () => {
       stopAllAudio();

@@ -117,6 +117,7 @@ export default function ChatWindow() {
   // 🔊 (분리됨) 말풍선 TTS 훅
   const { playingMessageKey, handlePlayTTS, stopAllAudio, clearAudioCache } = useSoundTTS({
   sessionId,
+  languageCode: selectedLanguage, // ✅ 추가 (string | null 그대로 OK)
   isGuest,
   ttsEnabled,
   isProfileLoading,
