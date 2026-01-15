@@ -1,11 +1,80 @@
-// app/api/account/delete/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseServer } from "@/lib/supabaseServerClient";
+
+const TTS_BUCKET = "tts-audio";
+
+async function collectAllFilePaths(prefix: string): Promise<string[]> {
+  const bucket = supabaseServer.storage.from(TTS_BUCKET);
+  const out: string[] = [];
+
+  const queue: string[] = [prefix];
+
+  while (queue.length) {
+    const current = queue.shift()!;
+
+    let offset = 0;
+    const limit = 1000;
+
+    while (true) {
+      const { data, error } = await bucket.list(current, {
+        limit,
+        offset,
+        sortBy: { column: "name", order: "asc" },
+      });
+
+      if (error) {
+        console.error("[TTS_CLEANUP] list error:", { current, error });
+        break;
+      }
+      if (!data || data.length === 0) break;
+
+      for (const item of data) {
+        const name = item?.name?.trim();
+        if (!name) continue;
+
+        const fullPath = `${current}/${name}`;
+        if (item.metadata) out.push(fullPath);
+        else queue.push(fullPath);
+      }
+
+      offset += data.length;
+      if (data.length < limit) break;
+    }
+  }
+
+  return out;
+}
+
+async function removeAllTtsUnderSession(sessionId: string) {
+  const bucket = supabaseServer.storage.from(TTS_BUCKET);
+
+  const before = await collectAllFilePaths(sessionId);
+  console.log("[TTS_CLEANUP] before delete:", { sessionId, count: before.length });
+
+  if (before.length) {
+    for (let i = 0; i < before.length; i += 1000) {
+      const chunk = before.slice(i, i + 1000);
+      const { error: rmErr } = await bucket.remove(chunk);
+
+      console.log("[TTS_CLEANUP] remove chunk:", {
+        sessionId,
+        chunkLen: chunk.length,
+        error: rmErr ? String((rmErr as any).message ?? rmErr) : null,
+      });
+
+      if (rmErr) console.error("[TTS_CLEANUP] remove error:", rmErr);
+    }
+  }
+
+  const after = await collectAllFilePaths(sessionId);
+  console.log("[TTS_CLEANUP] after delete:", { sessionId, remaining: after.length });
+}
 
 export async function POST(req: NextRequest) {
   try {
     const authHeader = req.headers.get("authorization") || "";
     const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
+
     if (!token) {
       return NextResponse.json({ ok: false, error: "Missing token" }, { status: 401 });
     }
@@ -17,9 +86,7 @@ export async function POST(req: NextRequest) {
     }
     const userId = userData.user.id;
 
-    // 2) Storage 삭제 (tts-audio / sessionId 폴더 단위)
-    const bucket = "tts-audio";
-
+    // 2) ✅ Storage 삭제 (tts-audio / sessionId 아래 전부 재귀 삭제)
     const { data: sessions, error: sessionErr } = await supabaseServer
       .from("chat_sessions")
       .select("id")
@@ -31,19 +98,10 @@ export async function POST(req: NextRequest) {
 
     if (sessions?.length) {
       for (const s of sessions) {
-        const sessionId = s.id;
-
-        const { data: files, error: listErr } = await supabaseServer.storage
-          .from(bucket)
-          .list(sessionId, { limit: 1000 });
-
-        if (listErr) {
-          // 폴더가 없거나 권한/버킷 문제일 수 있음. 탈퇴 자체를 막기보단 로그만 남기고 진행.
-          console.error("storage list error:", listErr);
-        } else if (files?.length) {
-          const paths = files.map((f) => `${sessionId}/${f.name}`);
-          const { error: rmErr } = await supabaseServer.storage.from(bucket).remove(paths);
-          if (rmErr) console.error("storage remove error:", rmErr);
+        try {
+          await removeAllTtsUnderSession(s.id);
+        } catch (e) {
+          console.error("[TTS_CLEANUP] session cleanup error:", { sessionId: s.id, e });
         }
       }
     }
@@ -56,7 +114,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: false, error: rpcErr.message }, { status: 500 });
     }
 
-    // 4) Auth 계정 삭제 (진짜 회원탈퇴)
+    // 4) Auth 계정 삭제
     const { error: delAuthErr } = await supabaseServer.auth.admin.deleteUser(userId);
     if (delAuthErr) {
       return NextResponse.json({ ok: false, error: delAuthErr.message }, { status: 500 });
@@ -64,9 +122,6 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ ok: true });
   } catch (e: any) {
-    return NextResponse.json(
-      { ok: false, error: e?.message ?? "Unknown error" },
-      { status: 500 }
-    );
+    return NextResponse.json({ ok: false, error: e?.message ?? "Unknown error" }, { status: 500 });
   }
 }
